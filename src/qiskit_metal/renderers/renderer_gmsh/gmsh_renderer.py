@@ -241,6 +241,7 @@ class QGmshRenderer(QRenderer):
         mesh_geoms: bool = True,
         ignore_metal_volume: bool = False,
         omit_ground_for_layers: Optional[list[int]] = None,
+        vacuum_box_min_gap: str = "1um",
     ):
         """Render the design in Gmsh and apply changes to modify the geometries
         according to the type of simulation. Simulation parameters provided by the user.
@@ -262,6 +263,8 @@ class QGmshRenderer(QRenderer):
                                                         Defaults to False.
             omit_ground_for_layers (Optional[list[int]]): omit rendering the ground plane for
                                                          specified layers. Defaults to None.
+            vacuum_box_min_gap (str, optional): minimal spacing between the vacuum box surface
+                                                    and the sample holder box. Defaults to "1um".
         """
 
         # For handling the case when the user wants to use
@@ -290,6 +293,7 @@ class QGmshRenderer(QRenderer):
             draw_sample_holder=draw_sample_holder,
             skip_junctions=skip_junctions,
             omit_ground_for_layers=omit_ground_for_layers,
+            vacuum_box_min_gap=vacuum_box_min_gap,
         )
 
         self.apply_changes_for_simulation(
@@ -311,6 +315,7 @@ class QGmshRenderer(QRenderer):
         box_plus_buffer: bool = True,
         skip_junctions: bool = False,
         omit_ground_for_layers: Optional[list[int]] = None,
+        vacuum_box_min_gap: str = "1um",
     ):
         """This function draws the raw geometries in Gmsh as taken from the
         QGeometry tables and applies thickness depending on the layer-stack.
@@ -327,6 +332,8 @@ class QGmshRenderer(QRenderer):
                                                         junctions. Defaults to False.
             omit_ground_for_layers (Optional[list[int]]): omit rendering the ground plane for
                                                          specified layers. Defaults to None.
+            vacuum_box_min_gap (str, optional): minimal spacing between the vacuum box surface
+                                                    and the sample holder box. Defaults to "1um".
         """
 
         self.qcomp_ids, self.case = self.get_unique_component_ids(selection)
@@ -343,6 +350,7 @@ class QGmshRenderer(QRenderer):
             box_plus_buffer=box_plus_buffer,
             omit_layers=omit_ground_for_layers,
             draw_sample_holder=draw_sample_holder,
+            vacuum_box_min_gap=vacuum_box_min_gap,
         )
         self.subtract_from_layers(omit_layers=omit_ground_for_layers)
         self.gmsh_occ_synchronize()
@@ -704,6 +712,7 @@ class QGmshRenderer(QRenderer):
         draw_sample_holder: bool,
         omit_layers: Optional[List[int]] = None,
         box_plus_buffer: bool = True,
+        vacuum_box_min_gap: str = "1um",
     ):
         """Render all chips of the design. calls `render_chip` to render the actual geometries
 
@@ -714,6 +723,8 @@ class QGmshRenderer(QRenderer):
             draw_sample_holder (bool): To draw the sample holder box.
             box_plus_buffer (bool, optional): For adding buffer to chip dimensions.
                                               Defaults to True.
+            vacuum_box_min_gap (str, optional): minimal spacing between the vacuum box surface
+                                                    and the sample holder box. Defaults to "1um".
         """
         layer_list = list(set(l for l in self.design.ls.ls_df["layer"]))
 
@@ -758,7 +769,7 @@ class QGmshRenderer(QRenderer):
             # This tolerance is needed for Gmsh to not cut
             # the vacuum_box into two separate volumes when the
             # substrate volume is subtracted from it
-            tol = self.parse_units_gmsh("1um")
+            tol = self.parse_units_gmsh(vacuum_box_min_gap)
             x = self.box_xy_bounds[0] - tol
             y = self.box_xy_bounds[1] - tol
             z = -vac_height[1]
@@ -1306,17 +1317,17 @@ class QGmshRenderer(QRenderer):
 
     def export_mesh(self, filepath: str, scaling_factor: float = 1e-3):
         """Export mesh from Gmsh into a file.
-        Supported formats: (.msh, .msh2, .mesh).
+        Supported formats: (.msh, .msh2, .mesh, msh4).
 
         Args:
             filepath (str): path of the file to export mesh to.
             scaling_factor (float): specify a scaling factor for the mesh. Defaults to 1e-3.
         """
-        valid_file_exts = ["msh", "msh2", "mesh"]
+        valid_file_exts = ["msh", "msh2", "mesh", "msh4"]
         file_ext = filepath.split(".")[-1]
         if file_ext not in valid_file_exts:
             self.logger.error(
-                "RENDERER ERROR: filename needs to have a .msh extension. Exporting failed."
+                "RENDERER ERROR: filename needs to have a .msh, .msh2, .msh4 or .mesh extension. Exporting failed."
             )
             return
 
@@ -1331,17 +1342,32 @@ class QGmshRenderer(QRenderer):
         gmsh.write(filepath)
 
     def export_geo_unrolled(self, filepath: str):
-        """Export the Gmsh geometry as geo_unrolled file.
-        Supported formats: .geo_unrolled
+        """Export the Gmsh geometry as a geo_unrolled file.
 
         Args:
             filepath (str): path of the file to export geometry to
         """
-        valid_file_exts = ["geo_unrolled"]
+        file_ext = filepath.split(".")[-1]
+        if file_ext != "geo_unrolled":
+            self.logger.error(
+                "RENDERER ERROR: filename does not have a geo_unrolled extension. "
+                "Consider using the method `export_geometry`."
+            )
+        self.export_geometry(filepath)
+
+    def export_geometry(self, filepath: str):
+        """Export the Gmsh geometry as a geo_unrolled, BREP or XAO file.
+        Supported formats: .geo_unrolled, .brep, .xao
+
+        Args:
+            filepath (str): path of the file to export geometry to
+        """
+        valid_file_exts = ["geo_unrolled", "brep", "xao"]
         file_ext = filepath.split(".")[-1]
         if file_ext not in valid_file_exts:
             self.logger.error(
-                "RENDERER ERROR: filename needs to have a .geo_unrolled extension. Exporting failed."
+                "RENDERER ERROR: filename needs to have one of the following extensions: "
+                f"{', '.join(valid_file_exts)}. Exporting failed."
             )
             return
 
@@ -1353,7 +1379,7 @@ class QGmshRenderer(QRenderer):
             raise ValueError(f"Directory not found: {par_dir}")
 
         has_mesh = False if len(gmsh.model.mesh.field.list()) == 0 else True
-        if has_mesh:
+        if has_mesh and file_ext == "geo_unrolled":
             self.logger.warning(
                 "WARNING: The existing model contains mesh size field definitions, "
                 "which will show up in your exported .geo_unrolled file. If "
@@ -1361,15 +1387,23 @@ class QGmshRenderer(QRenderer):
                 "to export the geometry before generating the mesh in your design as "
                 "it might interfere with your .geo_unrolled file imports."
             )
+        elif has_mesh and file_ext == "xao":
+            self.logger.warning(
+                "WARNING: The existing model contains mesh size field definitions, "
+                "which are not needed when exporting to XAO files for use in "
+                "renderers that support adaptive meshing refinement (AMR). If you "
+                "are going to use AMR, consider disabling the use of mesh size "
+                "fields.")
 
         gmsh.write(filepath)
 
-        # Prepend "SetFactory("OpenCASCADE");" in the exported file
-        line = 'SetFactory("OpenCASCADE");'
-        with open(filepath, "r+") as f:
-            content = f.read()
-            f.seek(0, 0)
-            f.write(line.rstrip("\r\n") + "\n" + content)
+        if file_ext == "geo_unrolled":
+            # Prepend "SetFactory("OpenCASCADE");" in the exported file
+            line = 'SetFactory("OpenCASCADE");'
+            with open(filepath, "r+") as f:
+                content = f.read()
+                f.seek(0, 0)
+                f.write(line.rstrip("\r\n") + "\n" + content)
 
     def import_post_processing_data(
         self,

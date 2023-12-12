@@ -44,6 +44,10 @@ renderers_to_load = Dict(
         path_name="qiskit_metal.renderers.renderer_elmer.elmer_renderer",
         class_name="QElmerRenderer",
     ),
+    qtcad=Dict(
+        path_name="qiskit_metal.renderers.renderer_qtcad.qtcad_renderer",
+        class_name="QQTCADRenderer",
+        ),
     aedt_q3d=Dict(
         path_name="qiskit_metal.renderers.renderer_ansys_pyaedt.q3d_renderer_aedt",
         class_name="QQ3DPyaedt",
