@@ -14,9 +14,10 @@ from typing import Union, Optional
 import shutil
 from pathlib import Path
 import subprocess
+import numpy as np
 import pandas as pd
 import json
-import subprocess
+import pickle
 
 from qiskit_metal import Dict, draw
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
@@ -24,19 +25,10 @@ from qiskit_metal.renderers.renderer_gmsh.gmsh_renderer import QGmshRenderer
 from qiskit_metal.designs import MultiPlanar
 
 QISKIT_CAPACITANCE_SCALE = 1e-15
-JSON_FILEPATH = "qtcad_data.json"
+JSON_FILENAME = "qtcad_data.json"
+QTCAD_CAP_OUTPUT_FILENAME = "qtcad_output_cap.pickle"
+QTCAD_EIG_OUTPUT_FILENAME = "qtcad_output_eigs.pickle"
 
-
-def load_capacitance_matrix_from_file(filename: str) -> pd.DataFrame:
-    """Load capacitance matrix from file.
-
-    Args:
-        filename (str): A '.txt' file containing the capacitance matrix.
-
-    Returns:
-        pd.DataFrame:: Table containing capacitance matrix.
-    """
-    return pd.read_csv(filename, delimiter=" ", index_col=0)
 
 
 class QQTCADRenderer(QRendererAnalysis):
@@ -44,41 +36,68 @@ class QQTCADRenderer(QRendererAnalysis):
     Based on QElmerRenderer.
 
     QQTCADRenderer default options:
-        * adaptive -- Adaptive mesh refinement flag.
-        * adaptive_tol -- The error threshold used in adaptive meshing refinement.
-        * adaptive_mesh_scale -- Scale factor of the design files.
+        * adaptive -- Adaptive mesh refinement flag. Defaults to `True`.
+        * adaptive_mesh_scale -- Scale factor of the design files. Default: 1e-3,
+                                 millimetre.
         * output_dir -- Directory that will be used to store the
-                        refined meshes and auxiliary files.
-        * geo_filepath -- Path to the (`.brep`) design file.
-        * mesh_filepath -- Path to the (`.msh2`) mesh file.
-        * mesh_scale -- Scaling factor of the static meshes.
+                        refined meshes and auxiliary files. Defaults to the current
+                        directory.
+        * geo_filepath -- Path to the design file containing the geometry of the
+                          problem (recommended format: .xao).
+                          Default: `qiskit_device.xao`
+        * mesh_filepath -- Path to the mesh file (recommended format: .msh4).
+                           Default: `qiskit_device.msh4`
+        * mesh_scale -- Scaling factor of the static meshes. Default: 1e-3, millimetre.
         * materials -- Dictionary to store material properties.
-        * refinement_speed_param -- value between 0 and 1. Lower value means
-                                    more aggressive refinement.
-        * min_converged_iter -- how many consecutive iterations are required to
-                                give results that agree within the tolerance
-                                thresholds.
-        * make_subdir -- if True, computation results will be stored
-                         in a new subdirectory within output_dir
+        * make_subdir -- if `True`, computation results will be stored in a new
+                         subdirectory within output_dir labeled by the current date and
+                         time. Defaults to `True`
+
+        * capacitance -- Dictionary of parameters specific to the capacitance extractor.
+
+            * tol_rel: relative tolerance (see Note). Defaults to 0.05.
+            * tol_abs: absolute tolerance (see Note). Defaults to 0.0.
+            * min_converged_iters -- How many consecutive iterations are required to give
+                                 results that agree within the tolerance thresholds.
+                                 Default: 3.
+
+            Note:
+                The convergence threshold for each entry of the capacitance
+                matrix C_ij is set as tol_rel * |C_{ij}| + tol_abs. The attribute
+                tol_abs is useful when :math:`|C_{ij}|` is expected to be zero or
+                very small.
+
+        * maxwell_emode -- Dictionary of parameters specific to the Maxwell eigenmode
+                                        extractor.
+
+            * tol_rel: relative tolerance on the frequency. Defaults to 0.05.
+            * min_converged_iters -- How many consecutive iterations are required to give
+                                 results that agree within the tolerance thresholds.
+                                 Default: 5.
     """
 
-    # The defaults of a renderer must be in a dict named `default_options'. They
+    # The defaults of a renderer must be in a dict named `default_options`. They
     # can be overwritten by passing an `options` dictionary when instantiating
     # QQTCADRenderer.
     default_materials = dict(substrate="qtcad_materials.Si",)
     default_options = dict(
         adaptive=True,
-        adaptive_tol=0.05,
-        adaptive_mesh_scale=1,
+        adaptive_mesh_scale=1e-3,
         output_dir=".",
-        mesh_scale=1,
-        # TODO: Remove this.
-        refinement_speed_param=0.8908987181403,
-        min_converged_iters=3,
-        make_subdir=True,
-        geo_filepath="qiskit_device.brep",
-        mesh_filepath="qiskit_device.msh2",
+        geo_filepath="qiskit_device.xao",
+        mesh_filepath="qiskit_device.msh4",
+        mesh_scale=1-3,
         materials=default_materials,
+        make_subdir=True,
+        capacitance=dict(
+            tol_rel=0.05,
+            tol_abs=0.0,
+            min_converged_iters=3,
+        ),
+        maxwell_emode=dict(
+            tol_rel=0.05,
+            min_converged_iters=5,
+        ),
     )
 
     name = "qtcad"
@@ -94,11 +113,11 @@ class QQTCADRenderer(QRendererAnalysis):
         """
         Args:
             design ('MultiPlanar'): The design.
-            layer_types (Union[dict, None]): the type of layer in the format:
-              dict(metal=[...], dielectric=[...]). Defaults to None.
-            initiate (bool): True to initiate the renderer (Default: False).
+            layer_types (Union[dict, None]): The type of layer in the format:
+              dict(metal=[...], dielectric=[...]). Defaults to `None`.
+            initiate (bool): True to initiate the renderer. Defaults to `False`.
             options (Dict, optional): Used to override default options. Defaults
-              to None.
+              to `None`.
         """
 
         default_layer_types = dict(metal=[1], dielectric=[3])
@@ -106,6 +125,9 @@ class QQTCADRenderer(QRendererAnalysis):
                             if layer_types is None else layer_types)
 
         super().__init__(design=design, initiate=initiate, options=options)
+
+        self.mesh_file = None
+        self.json_filepath = None
 
         # If not using adaptive meshing, set adaptive parameters to None.
         # FIXME In the future, it would be desirable to have a flag in the
@@ -123,7 +145,7 @@ class QQTCADRenderer(QRendererAnalysis):
     def initialized(self):
         """Check if the renderer is ready to be used.
 
-        Must return `True' if successful, `False' otherwise.
+        Must return `True` if successful, `False` otherwise.
         """
         status = all([self.gmsh.initialized, self._qtcad_ready])
         return status
@@ -176,7 +198,7 @@ class QQTCADRenderer(QRendererAnalysis):
         if not self._check_paraview:
             self.logger.warning(
                 "ParaView was not found in the user’s path."
-                " Please install it if you want post-processing visualisation.")
+                " Please install it if you want post-processing visualization.")
 
         return True
 
@@ -188,9 +210,7 @@ class QQTCADRenderer(QRendererAnalysis):
         draw_sample_holder: bool = True,
         skip_junctions: bool = True,
         mesh_geoms: bool = True,
-        ignore_metal_volume: bool = True,
         omit_ground_for_layers: Optional[list[int]] = None,
-        vacuum_box_min_gap: str = "100um",
         initial_mesh_h_min: str = "150um",
         initial_mesh_h_max: str = "150um",
         meshing_algorithm: int = 10,
@@ -201,31 +221,33 @@ class QQTCADRenderer(QRendererAnalysis):
 
         Args:
             selection (Union[list, None], optional): List of selected components
-              to render. Defaults to None.
+              to render. Defaults to `None`.
             open_pins (Union[list, None], optional): List of open pins that are
-              open. Defaults to None.
-            box_plus_buffer (bool, optional): Set to True for adding buffer to
-              chip dimensions. Defaults to True.
-            draw_sample_holder (bool, optional): To draw the sample holder box.
-              Defaults to True.
-            skip_junctions (bool, optional): Set to True to sip rendering the
-              junctions. Defaults to False.
-            mesh_geoms (bool, optional): Set to True for meshing the geometries.
-              Defaults to True.
-            ignore_metal_volume (bool, optional): ignore the volume of metals
-              and replace it with a list of surfaces instead. Defaults to False.
-            omit_ground_for_layers (Optional[list[int]]): omit rendering the
-              ground plane for specified layers. Defaults to None.
-            vacuum_box_min_gap (str, optional): minimal spacing between the
-              vacuum box surface and the sample holder box. Defaults to "100um".
-            initial_mesh_h_min (str, optional): minimum caracteristic length for
+              open. Defaults to `None`.
+            box_plus_buffer (bool, optional): Set to `True` for adding buffer to
+              chip dimensions. Defaults to `True`.
+            draw_sample_holder (bool, optional): Set to `True` to draw the sample
+              holder box. Defaults to `True`.
+            skip_junctions (bool, optional): Set it to `True` to skip rendering the
+              junctions. Defaults to `False`.
+            mesh_geoms (bool, optional): Set to `True` for meshing the geometries.
+              Defaults to `True`.
+            omit_ground_for_layers (Optional[list[int]]): Omit rendering the
+              ground plane for specified layers. Defaults to `None`.
+            initial_mesh_h_min (str, optional): Minimum caracteristic length for
               the first mesh (adaptive) or for the only mesh (static).
-            initial_mesh_h_max (str, optional): maximum caracteristic length for
+            initial_mesh_h_max (str, optional): Maximum caracteristic length for
               the first mesh (adaptive) or for the only mesh (static).
             meshing_algorithm (int, optional): Gmsh's 3D mesh algorithm. The
               possible values are 1 (Delaunay), 3 (initial mesh only),
               4 (frontal), 7 (MMG3D), 9 (R-tree), 10 (HXT). (Default: 10)
         """
+
+        # Minimal spacing between the vacuum box surface and the sample holder box.
+        vacuum_box_min_gap = "300um"
+
+        # Ignore the volume of metals and replace it with a list of surfaces instead
+        ignore_metal_volume = True
 
         self.gmsh.options.mesh.min_size = initial_mesh_h_min
         self.gmsh.options.mesh.max_size = initial_mesh_h_max
@@ -254,10 +276,10 @@ class QQTCADRenderer(QRendererAnalysis):
 
         self.sample_holder = draw_sample_holder
         self.qcomp_geom_table = self.get_qgeometry_table()
-        self.nets = self.assign_nets(open_pins=open_pins)
+        self.conductors = self.assign_conductors(open_pins=open_pins)
 
     def get_qgeometry_table(self) -> pd.DataFrame:
-        """Combines the `path' and `poly' qgeometry tables into a single table,
+        """Combines the `path` and `poly` qgeometry tables into a single table,
         and adds column containing the minimum z coordinate of the layer
         associated with each qgeometry.
 
@@ -301,13 +323,13 @@ class QQTCADRenderer(QRendererAnalysis):
 
         return qcomp_geom_table
 
-    def assign_nets(
+    def assign_conductors(
         self,
         open_pins: Union[list,
                          None] = None) -> dict[Union[str, int], list[str]]:
-        """Assigns a netlist number to each galvanically connected metal region,
-        and returns a dictionary with each net as a key, and the corresponding
-        list of geometries associated with that net as values.
+        """Assigns a netlist number to each galvanically connected metal region (a
+        ‘signal conductor’) and returns a dictionary with each net as a key, and the
+        corresponding list of geometries associated with that net (conductor) as values.
 
         Args:
             open_pins (Union[list, None], optional): List of tuples of pins that
@@ -317,6 +339,7 @@ class QQTCADRenderer(QRendererAnalysis):
             dict[Union[str, int], list[str]]: dictionary with keys for each net,
               and list of values with the corresponding geometries associated
               with that net as values.
+
         """
 
         netlists = dict()
@@ -492,7 +515,7 @@ class QQTCADRenderer(QRendererAnalysis):
     def render_components(self, table_type: str):
         """Render all components of the design.
 
-        If selection is `None', then render all components.
+        If selection is `None`, then render all components.
 
         Args:
             selection (QComponent): Component to render.
@@ -571,81 +594,144 @@ class QQTCADRenderer(QRendererAnalysis):
             geometry_file (Optional[str], optional): File path to which to save
               the geometry file.
         """
+
         if geometry_file is None:
             geometry_file = self._options["geo_filepath"]
+
         # We check against `None` once again because
         # `self._options["geo_filepath"]` is `None` if AMR is not enabled.
         if geometry_file is not None:
+            Path(geometry_file).parent.resolve().mkdir(exist_ok=True, parents=True)
             self.gmsh.export_geometry(geometry_file)
 
         if mesh_file is None:
             mesh_file = self._options["mesh_filepath"]
-        self.gmsh.export_mesh(mesh_file, scaling_factor=1)
 
-    def display_post_processing_data(self, signal_net: str) -> None:
+        self.mesh_file = mesh_file
+
+        # Guarantee the path to the mesh file exists.
+        Path(self.mesh_file).parent.resolve().mkdir(exist_ok=True, parents=True)
+        self.gmsh.export_mesh(self.mesh_file, scaling_factor=1)
+
+    def display_post_processing_data(self, signal_conductor: str) -> None:
         """Post-process the data output by QTCAD in ParaView.
 
         Args:
-            signal_net (str): Signal net for post-processing.
+            signal_conductor (str): Signal conductor for post-processing.
         """
-        if signal_net not in self.signal_nets:
+        if signal_conductor not in self.signal_conductors:
             self.logger.error(
-                f"No signal net “{self.signal_nets}” found in the model."
-                " The signal nets defined in this model are:\n"
-                ", ".join([f'"{net}"' for net in self.signal_nets]))
+                f"No signal conductor “{self.signal_conductors}” found in the model."
+                " The signal conductors defined in this model are:\n"
+                ", ".join([f'"{cond}"' for cond in self.signal_conductors]))
         else:
-            arguments = ["paraview", self.post_process_files[signal_net]]
+            arguments = ["paraview", self.post_process_files[signal_conductor]]
             subprocess.call(arguments, cwd=self.output_dir)
 
-    def export_to_json(self, json_filepath=None):
-        """Exports parameters that are required for QTCAD as a JSON file."""
+    def export_parameters(self, json_filepath=None):
+        """Exports parameters that are required for QTCAD simulations as a JSON file."""
 
-        if json_filepath == None:
-            json_filepath = JSON_FILEPATH
+        if json_filepath is None:
+            json_filepath = Path(self._options["output_dir"]) / JSON_FILENAME
 
         self.json_filepath = json_filepath
 
         data = {
             "gmsh_physical_groups": self.gmsh.physical_groups,
-            "nets": self.nets,
+            "_conductors": self.conductors,
             "sample_holder": self.sample_holder,
             "qtcad_options": {
                 k: v for k, v in self._options.items() if k != "materials"
             },
         }
 
+        # Guarantee the path to the JSON file exists.
+        Path(json_filepath).parent.resolve().mkdir(exist_ok=True, parents=True)
         with open(json_filepath, "w") as f:
             json.dump(data, f, indent=2)
 
-    def qtcad_subprocess(self,
-                         solve_for,
-                         json_filepath=None,
-                         script_path="wrapper.py",
-                         env_name="qtcad",
-                         show_result=True,
-                         show_err=True):
+    def _check_conda_env(self, env_name) -> bool:
+        """Check the existence of a conda environment.
+
+        Args:
+            env_name (str): name of the conda environment to check for its existence.
+        """
+
+        conda_cmd = shutil.which("conda")
+        proc = subprocess.run(
+            [conda_cmd, "list", "--name", env_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return_code = proc.returncode
+
+        if return_code == 0:
+            return True
+        return False
+
+    def run_qtcad(self,
+                  solve_for,
+                  json_filepath=None,
+                  env_name="qtcad",
+                  ):
         """Calls wrapper file in a specific environment
 
             Args:
-                solve_for (str): solve for `cap' (capacitance matrix) or `eigs'
+                solve_for (str): Solve for `cap` (capacitance matrix) or `eigs`
                   (Maxwell eigenmodes).
-                json_filepath (str): filepath to the necessary parameters for
-                  the solver. Defaults to the value used when exporting them
-                  using `export_to_json'.
-                script_filepath (str): filepath to the QTCAD wrapper routine.
-                  Default: wrapper.py
-                env_name (str): name of the conda environment where QTCAD is
-                  available. Default: qtcad
+                json_filepath (str): Path to the necessary parameters for the solver.
+                  Defaults to the value used when exporting them using
+                  `export_parameters`.
+                env_name (str): name of the conda environment where QTCAD is available.
+                  Default: qtcad
 
         """
-        # TODO: Check existence of the input JSON file.
-        if json_filepath == None:
+        # Path to the QTCAD wrapper routine.
+        qtcad_wrapper_path = str(Path(__file__).parent.resolve() / "wrapper.py")
+
+        if json_filepath is None:
             json_filepath = self.json_filepath
 
+        if json_filepath is None:
+            raise Exception(
+                "Unable to find the JSON file with the input parameters to run"
+                " QTCAD simulations."
+                " Please make sure to have exported them using"
+                " `export_parameters`."
+                )
+        if not Path(json_filepath).exists():
+            raise Exception(
+                "Unable to find the JSON file with the input parameters to run"
+                f" QTCAD simulations at ‘{json_filepath}’."
+                " Please make sure to have exported them using"
+                " `export_parameters`."
+                " If a custom path was provided, make sure it points to a valid"
+                " QTCAD JSON file."
+                )
+
+        if (self.mesh_file is None) or (not Path(self.mesh_file).exists()):
+            raise Exception(
+                "Unable to find the mesh file."
+                " Please make sure to have generated it using `export_mesh`."
+                )
+
+        qtcad_env_found = self._check_conda_env(env_name)
+        if not qtcad_env_found:
+            raise Exception(
+                f"Unable to find QTCAD's conda environment ‘{env_name}’."
+                " If you have installed QTCAD in a custom environment, please provide its name"
+                " using the parameter `env_name`."
+                )
+
         # Launch a subprocess with unbuffered Python (-u).
+        conda_cmd = shutil.which("conda")
+
+        self.logger.info("================")
+        self.logger.info("Running QTCAD...")
+        self.logger.info("================")
         process = subprocess.Popen(
             [
-                "conda", "run", "-n", env_name, "python", "-u", script_path,
+                conda_cmd, "run", "-n", env_name, "python", "-u", qtcad_wrapper_path,
                 solve_for, json_filepath
             ],
             stdout=subprocess.PIPE,
@@ -654,8 +740,85 @@ class QQTCADRenderer(QRendererAnalysis):
             text=True,
         )
 
-        # Stream the output line by line, avoiding newlines.
+        # TODO: Stream the output.
+        # Show the output line by line, avoiding newlines.
         for line in process.stdout:
             print(line, end="")
 
         process.wait()
+
+
+    def load_qtcad_capacitance_matrix(self, filepath: Union[str, None] = None) -> pd.DataFrame:
+        """Load capacitance matrix from file.
+
+        Args:
+            filename (str, optional): Path to the pickle file containing QTCAD's capacitance
+            matrix (a dictionary; units: femtofarads). Defaults to `None`, loading the
+            default path to the file written by the capacitance extractor.
+
+        Returns:
+            pd.DataFrame: Table containing the capacitance matrix.
+        """
+        if filepath is None:
+            filepath = Path(self._options["output_dir"]) / QTCAD_CAP_OUTPUT_FILENAME
+
+        input_file = Path(filepath)
+        if not input_file.exists():
+            raise Exception(
+                f"Unable to load the capacitance matrix generated by QTCAD from ‘{filepath}’."
+                " Please make sure the path to the file is correct and the capacitance"
+                " extraction method has ran successfully.",
+                )
+
+        with open(filepath, 'rb') as handle:
+            cap = pickle.load(handle)
+
+        # TODO Check validity of data.
+
+        # Parse dictionary and create an ordered capacitance matrix.
+        sig_conductor_names = np.array(
+            list(dict.fromkeys([k[0] for k in cap.keys()]).keys()))
+        sig_conductor_length = len(sig_conductor_names)
+        cap_list = [cap[(i, j)] for i in sig_conductor_names for j in sig_conductor_names]
+        cap_matrix_array = np.reshape(cap_list,
+                                        (sig_conductor_length, sig_conductor_length))
+        cap_matrix_df = pd.DataFrame(
+            cap_matrix_array,
+            index=sig_conductor_names,
+            columns=sig_conductor_names,
+        )
+
+        return cap_matrix_df
+
+    def load_qtcad_maxwell_eigenmodes(self, filepath: Union[str, None] = None) -> np.ndarray:
+        """Load Maxwell eigenmodes from file.
+
+        Args:
+            filename (str, optional): Path to the pickle file containing QTCAD's Maxwell
+            eigenmode calculation result (units: gigahertz). Defaults to `None`, loading the
+            default path to the file written by the Maxwell eigenmode extractor.
+
+        Returns:
+            nd.ndarray: Ordered list of Maxwell eigenmodes.
+        """
+        if filepath is None:
+            filepath = Path(self._options["output_dir"]) / QTCAD_EIG_OUTPUT_FILENAME
+
+        input_file = Path(filepath)
+        if not input_file.exists():
+            raise Exception(
+                f"Unable to load Maxwell eigenmodes generated by QTCAD from ‘{filepath}’."
+                " Please make sure the path to the file is correct and the eigenmode"
+                " extraction method has ran successfully."
+                )
+
+        with open(filepath, 'rb') as handle:
+            eig = pickle.load(handle)
+
+        # TODO Check validity of data.
+
+        frequencies = pd.DataFrame(eig, columns=["Frequency (GHz)"])
+        frequencies.index.name = "Eigenmode"
+
+        return frequencies / 1e9
+

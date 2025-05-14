@@ -11,7 +11,7 @@ logger = logging.getLogger("qtcad")
 
 from qtcad.device import Device as qtcad_device
 from qtcad.device.mesh3d import Mesh as qtcad_mesh
-from device import materials as qtcad_materials
+from qtcad.device import materials as qtcad_materials
 from qtcad.device.capacitance import Solver as QtcadSolverCap
 from qtcad.device.capacitance import SolverParams as QtcadSolverCapParams
 from qtcad.device.maxwell_eigenmode import Solver as QtcadSolverEig
@@ -19,18 +19,17 @@ from qtcad.device.maxwell_eigenmode import SolverParams as QtcadSolverEigParams
 
 from dataclasses import dataclass
 
-QTCAD_MIN_SUPPORTED_VERSION = "1.5.0"
 QISKIT_CAPACITANCE_SCALE = 1e-15
 QISKIT_NUMBER_EIGENMODES = 3
-QTCAD_CAP_OUTPUT = "qtcad_output_cap.pickle"
-QTCAD_EIG_OUTPUT = "qtcad_output_eigs.pickle"
 
+QTCAD_CAP_OUTPUT_FILENAME = "qtcad_output_cap.pickle"
+QTCAD_EIG_OUTPUT_FILENAME = "qtcad_output_eigs.pickle"
 
 @dataclass
 class QTCADInputParams:
 
     gmsh_physical_groups: dict
-    nets: dict
+    _conductors: dict
     sample_holder: bool
     qtcad_options: dict
 
@@ -45,12 +44,12 @@ class QQTCADWrapper():
             json_data : Parameters imported from QQTCADRenderer.
         """
 
-        if json_data == None:
+        if json_data is None:
             json_data = "qtcad_data.json"
 
         self.json_data = json_data
         self.gmsh_physical_groups = None
-        self.nets = None
+        self._conductors = None
         self.sample_holder = None
         self.qtcad_options = None
 
@@ -61,7 +60,7 @@ class QQTCADWrapper():
 
         validated = QTCADInputParams(**data)
         self.gmsh_physical_groups = validated.gmsh_physical_groups
-        self.nets = validated.nets
+        self._conductors = validated._conductors
         self.sample_holder = validated.sample_holder
         self._options = validated.qtcad_options
 
@@ -98,12 +97,12 @@ class QQTCADWrapper():
         If `materials` is not given, read from the materials set up when instantiating.
 
         Args:
-            materials (dict[str, qtcad_materials.Material], optional): Materials
-              used by bodies in the design.
+            materials (dict[str, qtcad_materials.Material], optional): Materials used
+              by bodies in the design.
 
         Returns:
-            dict[str, qtcad_materials.Material]: Information about the
-              dielectric volumes in the design.
+            dict[str, qtcad_materials.Material]: Information about the dielectric
+              volumes in the design.
         """
         media = dict()
         if materials is None:
@@ -113,11 +112,10 @@ class QQTCADWrapper():
         else:
             if self.sample_holder and "vacuum" not in materials:
                 logger.warn(
-                    "No material properties assigned to the sample holder "
-                    "(the vacuum box). We will assume it to be a vacuum. "
-                    "If this is not desired, please add an entry labelled "
-                    "`vacuum` to the dictionary of material properties "
-                    "passed to this method.")
+                    "No material properties assigned to the sample holder (the vacuum"
+                    " box). We will assume it to be a vacuum. If this is not desired,"
+                    " please add an entry labelled `vacuum` to the dictionary of"
+                    " material properties passed to this method.")
             materials_dict = materials
 
         for label, material in materials_dict.items():
@@ -147,8 +145,8 @@ class QQTCADWrapper():
     def set_up_boundary_conditions(self, bnd_conditions) -> None:
         """Assigns boundary conditions to the conductors of the device."""
 
-        self.signal_nets = dict()
-        ground_net = []
+        self.signal_conductors = dict()
+        ground_conductor = []
         self.conductors = []
 
         for layer, ph_geoms in self.gmsh_physical_groups.items():
@@ -160,29 +158,29 @@ class QQTCADWrapper():
                 if "dielectric" in name:
                     continue
                 if ("ground_plane" in name) and ("sfs" in name):
-                    ground_net.append(name)
+                    ground_conductor.append(name)
 
-        for net, geom_names in self.nets.items():
-            signal_net_surfaces = [f"{name}_sfs" for name in geom_names]
+        for conductor, geom_names in self._conductors.items():
+            signal_conductor_surfaces = [f"{name}_sfs" for name in geom_names]
 
-            if net == "gnd":
-                ground_net += signal_net_surfaces
+            if conductor == "gnd":
+                ground_conductor += signal_conductor_surfaces
             else:
-                self.signal_nets[geom_names[-1]] = signal_net_surfaces
+                self.signal_conductors[geom_names[-1]] = signal_conductor_surfaces
 
-        if len(self.signal_nets.keys()) == 0:
+        if len(self.signal_conductors.keys()) == 0:
             logger.warning(
-                "WARNING: No conductors were assigned to a signal net."
-                "QTCAD will not be able to extract the capacitance matrix for"
-                "this design.")
+                "WARNING: No conductors were assigned to a signal conductor."
+                " QTCAD will not be able to extract the capacitance matrix for"
+                " this design.")
 
         # Qiskit Metal assumes the presence of the ground(_plane) conductor in
-        # the capacitance matrix. Let us include the ground net as a regular
-        # signal net.
-        self.signal_nets["ground_plane"] = ground_net
+        # the capacitance matrix. Let us include the ground conductor as a regular
+        # signal conductor.
+        self.signal_conductors["ground_plane"] = ground_conductor
 
-        for net in self.signal_nets.values():
-            self.conductors += net
+        for conductor in self.signal_conductors.values():
+            self.conductors += conductor
 
         # Set (Dirichlet) boundary conditions for the conductors. Assign 0 V
         # to all as we are interest only in the capacitance matrix. For Maxwell
@@ -206,34 +204,33 @@ class QQTCADWrapper():
             num_modes (int): Number of modes to solve for.
 
         Returns:
-            The frequencies are stored in `device.maxwell_freqs'. The fields are
-            also stored in `device' and can be retrieved by calling the
-            corresponding field finding methods such as `device.e_field'.
+            The frequencies are stored in `device.maxwell_freqs`. The fields are
+            also stored in `device` and can be retrieved by calling the
+            corresponding field finding methods such as `device.e_field`.
         """
 
-        # Instantiate SolverParams and load common attributes from the `_options' attribute.
+        # Instantiate SolverParams and load common attributes from the `_options`
+        # attribute.
+        options_maxwell_emode = self._options["maxwell_emode"]
         solver_params_eig = QtcadSolverEigParams()
-        solver_params_eig.tol_adaptive = self._options["adaptive_tol"]
-        solver_params_eig.min_converged_iters = self._options[
-            "min_converged_iters"]
+        solver_params_eig.tol_rel = options_maxwell_emode["tol_rel"]
+        solver_params_eig.min_converged_iters = options_maxwell_emode["min_converged_iters"]
         solver_params_eig.output_dir = self._options["output_dir"]
         solver_params_eig.make_subdir = self._options["make_subdir"]
 
         # Specific attributes.
         solver_params_eig.num_modes = num_modes
-        # TODO Remove hardcoded frequency before integration.
-        solver_params_eig.min_freq = 1e9
+        solver_params_eig.name = self.name
 
         # Parse parameters.
         self.solver_params_eig = solver_params_eig
-        qtcad_solver_eigs = QtcadSolverEig(self.solver_params_eig)
+        qtcad_solver_eigs = QtcadSolverEig(
+            self.device, self.solver_params_eig, geo_file=self._options["geo_filepath"]
+        )
         self.solver_eig = qtcad_solver_eigs
 
         # Solve.
-        eigs_out = qtcad_solver_eigs.solve(
-            dvc=self.device,
-            geo_file=self._options["geo_filepath"],
-            name=self.name)
+        qtcad_solver_eigs.solve()
 
     def get_energy_e(self):
         """Finds the total electric energy in the device from the electric field.
@@ -249,8 +246,8 @@ class QQTCADWrapper():
             e_field = self.device.e_field()
             return self.solver_eig.energy_e(self.device, e_field)
 
-        raise ValueError("Device has no method `e_field' and/or `solver_eig'."
-                         "Try calling `solve_eigs' before.")
+        raise ValueError("Device has no method `e_field` and/or `solver_eig`."
+                         " Try calling `solve_eigs` before.")
 
     def get_energy_e_elems(self, mode: int):
         """Finds the electric energy in each element from the electric field.
@@ -272,30 +269,29 @@ class QQTCADWrapper():
             return self.solver_eig.energy_e_elems(self.device, e_field[...,
                                                                        mode])
 
-        raise ValueError("Device has no method `e_field' and/or `solver_eig'."
-                         "Try calling `solve_eigs' before.")
+        raise ValueError("Device has no method `e_field` and/or `solver_eig`."
+                         " Try calling `solve_eigs` before.")
 
     def get_energy_b(self):
-        """Finds the total magnetic energy in the device from the magnetic flux
-        density.
+        """Finds the total magnetic energy in the device from the magnetic flux density.
 
         Returns:
             Magnetic energy given by
 
             .. math::
                 \\int_{\\Omega} \\dfrac{\\vec B^* \\cdot \\vec B}{2 \\mu_0} d\\Omega
+
         """
 
         if hasattr(self.device, "b_field") and hasattr(self, "solver_eig"):
             b_field = self.device.b_field()
             return self.solver_eig.energy_b(self.device, b_field)
 
-        raise ValueError("Device has no method `e_field' and/or `solver_eig'."
-                         "Try calling `solve_eigs' before.")
+        raise ValueError("Device has no method `e_field` and/or `solver_eig`."
+                         " Try calling `solve_eigs` before.")
 
     def get_energy_b_elems(self, mode: int):
-        """Finds the magnetic energy in each element from the magnetic flux
-        density.
+        """Finds the magnetic energy in each element from the magnetic flux density.
 
         Args:
             mode : the electric energy in which mode.
@@ -314,8 +310,8 @@ class QQTCADWrapper():
             return self.solver_eig.energy_b_elems(self.device, b_field[...,
                                                                        mode])
 
-        raise ValueError("Device has no method `e_field' and/or `solver_eig'."
-                         "Try calling `solve_eigs' before.")
+        raise ValueError("Device has no method `e_field` and/or `solver_eig`."
+                         " Try calling `solve_eigs` before.")
 
     def solve_cap(self,
                   display_cap_matrix: bool = False,
@@ -323,25 +319,26 @@ class QQTCADWrapper():
                   max_cpus: Optional[int] = None):
         """Compute the capacitance matrix using QTCAD.
 
-        It is stored in the attribute `capacitance_matrix', being a
+        It is stored in the attribute `capacitance_matrix`, being a
         dict[tuple[str,str], float].
 
         Args:
             display_cap_matrix (bool, optional): Whether or not to return the
-              capacitance matrix. Defaults to `False'.
-            tol_abs (float, optional): Absolute tolerance. Default : `None' (use
+              capacitance matrix. Defaults to `False`.
+            tol_abs (float, optional): Absolute tolerance. Default : `None` (use
               QTCAD's default)
             max_cpus (int, optional): The largest number of CPUs to use during
               the solution. Default: QTCAD's default, the number of logical CPUs
               available.
         """
 
-        # Instantiate SolverParams and load common attributes from the
-        # `_options' attribute.
+        # Instantiate SolverParams and load common attributes from the `_options`
+        # attribute.
+        options_cap = self._options["capacitance"]
         solver_params_cap = QtcadSolverCapParams()
-        solver_params_cap.tol_rel = self._options["adaptive_tol"]
-        solver_params_cap.min_converged_iters = self._options[
-            "min_converged_iters"]
+        solver_params_cap.tol_rel = options_cap["tol_rel"]
+        solver_params_cap.tol_abs = options_cap["tol_abs"]
+        solver_params_cap.min_converged_iters = options_cap["min_converged_iters"]
         solver_params_cap.output_dir = self._options["output_dir"]
         solver_params_cap.make_subdir = self._options["make_subdir"]
 
@@ -350,6 +347,8 @@ class QQTCADWrapper():
 
         if max_cpus is not None:
             solver_params_cap.max_cpus = max_cpus
+
+        solver_params_cap.name = self.name
 
         self.solver_params_cap = solver_params_cap
 
@@ -365,14 +364,14 @@ class QQTCADWrapper():
         self.capacitance_matrix.to_csv(path, sep=" ", header=True)
 
     def _capacitance_matrix_to_array(self, cap) -> np.ndarray:
-        sig_net_names = np.array(
+        sig_conductor_names = np.array(
             list(dict.fromkeys([k[0] for k in cap.keys()]).keys()))
-        sig_net_length = len(sig_net_names)
+        sig_conductor_length = len(sig_conductor_names)
 
         # Create ordered capacitance matrix.
-        cap_list = [cap[(i, j)] for i in sig_net_names for j in sig_net_names]
+        cap_list = [cap[(i, j)] for i in sig_conductor_names for j in sig_conductor_names]
         cap_matrix_array = np.reshape(cap_list,
-                                      (sig_net_length, sig_net_length))
+                                      (sig_conductor_length, sig_conductor_length))
         return cap_matrix_array
 
     def compute_capacitance_matrix(self) -> dict[tuple[str, str], float]:
@@ -382,13 +381,12 @@ class QQTCADWrapper():
              dict: Capacitance matrix in femtofarads between the conductors.
         """
 
-        qtcad_solver = QtcadSolverCap(self.solver_params_cap)
+        qtcad_solver = QtcadSolverCap(
+            self.device, self.signal_conductors, self.solver_params_cap, geo_file=self._options["geo_filepath"]
+        )
 
         # dict[tuple[str,str], float]
-        cap_out = qtcad_solver.solve(dvc=self.device,
-                                     signal_nets=self.signal_nets,
-                                     geo_file=self._options["geo_filepath"],
-                                     name=self.name)
+        cap_out = qtcad_solver.solve()
 
         for cap in cap_out.keys():
             # Scale capacitance to femtofarads.
@@ -409,7 +407,9 @@ def main_solve_cap(json_data):
 
     qtcad_wrapper.solve_cap()
     # Save results as a pickle file to be ingested by the QQTCADRenderer.
-    with open(QTCAD_CAP_OUTPUT, 'wb') as file_handle:
+    filepath = Path(qtcad_wrapper._options["output_dir"]) / QTCAD_CAP_OUTPUT_FILENAME
+    filepath.parent.resolve().mkdir(exist_ok=True, parents=True)
+    with open(filepath, 'wb') as file_handle:
         pickle.dump(qtcad_wrapper.capacitance_matrix,
                     file_handle,
                     protocol=pickle.HIGHEST_PROTOCOL)
@@ -423,21 +423,18 @@ def main_solve_eigs(json_data, num_modes=QISKIT_NUMBER_EIGENMODES):
 
     qtcad_wrapper.solve_eigs(num_modes=num_modes)
 
-    with open(QTCAD_EIG_OUTPUT, 'wb') as file_handle:
-        pickle.dump(qtcad_wrapper.device.maxwell_freqs,
+    Path(qtcad_wrapper._options["output_dir"]).resolve().mkdir(exist_ok=True, parents=True)
+    filepath = Path(qtcad_wrapper._options["output_dir"]) / QTCAD_EIG_OUTPUT_FILENAME
+
+    with open(filepath, 'wb') as file_handle:
+        pickle.dump(qtcad_wrapper.device.maxwell_freqs.tolist(),
                     file_handle,
                     protocol=pickle.HIGHEST_PROTOCOL)
-
-    # TODO: Move this to QQTCADRenderer.
-    print("Frequencies:")
-    for m in range(num_modes):
-        print("mode %d: %.3f GHz" %
-              (m, qtcad_wrapper.device.maxwell_freqs[m] / 1e9))
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python worker.py <func1|func2> <argument>")
+        print("Usage: python wrapper.py quantity-to-solve-for path-to-json-file")
         sys.exit(1)
 
     solve_for = sys.argv[1]
@@ -448,5 +445,5 @@ if __name__ == "__main__":
     elif solve_for == "eigs":
         main_solve_eigs(json_data)
     else:
-        print(f"Wrong `solve_for' argument: {solve_for}."
-              "Use `cap' for capacitance or `eigs' for Maxwell eigenvalues.")
+        print(f"Wrong quantity to solve for: {solve_for}."
+              " Use `cap` for capacitance or `eigs` for Maxwell eigenvalues.")
