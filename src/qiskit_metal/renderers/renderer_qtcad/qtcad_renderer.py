@@ -777,8 +777,8 @@ class QQTCADRenderer(QRendererAnalysis):
         self.logger.info("================")
         process = subprocess.Popen(
             [
-                conda_cmd, "run", "-n", env_name, "python", "-u", qtcad_wrapper_path,
-                solve_for, json_filepath
+                conda_cmd, "run", "--no-capture-output", "-n", env_name, "python", "-u",
+                qtcad_wrapper_path, solve_for, json_filepath
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -786,8 +786,7 @@ class QQTCADRenderer(QRendererAnalysis):
             text=True,
         )
 
-        # TODO: Stream the output.
-        # Show the output line by line, avoiding newlines.
+        # Stream the output, showing it line by line and avoiding newlines.
         for line in process.stdout:
             print(line, end="")
 
