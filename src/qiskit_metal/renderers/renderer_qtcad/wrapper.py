@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Union, Optional
+from typing import Optional
 import numpy as np
 import sys
 import logging
@@ -20,7 +20,6 @@ from qtcad.device.maxwell_eigenmode import SolverParams as QtcadSolverEigParams
 from dataclasses import dataclass
 
 QISKIT_CAPACITANCE_SCALE = 1e-15
-QISKIT_NUMBER_EIGENMODES = 3
 
 QTCAD_CAP_OUTPUT_FILENAME = "qtcad_output_cap.pickle"
 QTCAD_EIG_OUTPUT_FILENAME = "qtcad_output_eigs.pickle"
@@ -197,11 +196,8 @@ class QQTCADWrapper():
         # it is a natural boundary
         # self.device.new_infinity_bnd("vacuum_box_sfs")
 
-    def solve_eigs(self, num_modes):
+    def solve_eigs(self):
         """Solve for Maxwell eigenmodes using QTCAD.
-
-        Args:
-            num_modes (int): Number of modes to solve for.
 
         Returns:
             The frequencies are stored in `device.maxwell_freqs`. The fields are
@@ -212,14 +208,21 @@ class QQTCADWrapper():
         # Instantiate SolverParams and load common attributes from the `_options`
         # attribute.
         options_maxwell_emode = self._options["maxwell_emode"]
+        options_maxwell_emode_raw = self._options["maxwell_emode_raw"]
         solver_params_eig = QtcadSolverEigParams()
-        solver_params_eig.tol_rel = options_maxwell_emode["tol_rel"]
-        solver_params_eig.min_converged_iters = options_maxwell_emode["min_converged_iters"]
+
+        if options_maxwell_emode_raw is None:
+            # Reduced set of parameters.
+            solver_params_eig.num_modes = options_maxwell_emode["num_modes"]
+            solver_params_eig.tol_rel = options_maxwell_emode["tol_rel"]
+            solver_params_eig.min_converged_iters = options_maxwell_emode["min_converged_iters"]
+        else:
+            # Pass parameters directly to `qtcad.device.maxwell_eigenmode.SolverParams`.
+            solver_params_eig = QtcadSolverEigParams(options_maxwell_emode_raw)
+
+        # Non-specialized attributes.
         solver_params_eig.output_dir = self._options["output_dir"]
         solver_params_eig.make_subdir = self._options["make_subdir"]
-
-        # Specific attributes.
-        solver_params_eig.num_modes = num_modes
         solver_params_eig.name = self.name
 
         # Parse parameters.
@@ -313,41 +316,30 @@ class QQTCADWrapper():
         raise ValueError("Device has no method `e_field` and/or `solver_eig`."
                          " Try calling `solve_eigs` before.")
 
-    def solve_cap(self,
-                  display_cap_matrix: bool = False,
-                  tol_abs: Optional[float] = None,
-                  max_cpus: Optional[int] = None):
+    def solve_cap(self):
         """Compute the capacitance matrix using QTCAD.
 
         It is stored in the attribute `capacitance_matrix`, being a
         dict[tuple[str,str], float].
-
-        Args:
-            display_cap_matrix (bool, optional): Whether or not to return the
-              capacitance matrix. Defaults to `False`.
-            tol_abs (float, optional): Absolute tolerance. Default : `None` (use
-              QTCAD's default)
-            max_cpus (int, optional): The largest number of CPUs to use during
-              the solution. Default: QTCAD's default, the number of logical CPUs
-              available.
         """
-
         # Instantiate SolverParams and load common attributes from the `_options`
         # attribute.
         options_cap = self._options["capacitance"]
+        options_cap_raw = self._options["capacitance_raw"]
         solver_params_cap = QtcadSolverCapParams()
-        solver_params_cap.tol_rel = options_cap["tol_rel"]
-        solver_params_cap.tol_abs = options_cap["tol_abs"]
-        solver_params_cap.min_converged_iters = options_cap["min_converged_iters"]
+
+        if options_cap_raw is None:
+            # Reduced set of parameters.
+            solver_params_cap.tol_rel = options_cap["tol_rel"]
+            solver_params_cap.tol_abs = options_cap["tol_abs"]
+            solver_params_cap.min_converged_iters = options_cap["min_converged_iters"]
+        else:
+            # Pass parameters directly to `qtcad.device.capacitance.SolverParams`.
+            solver_params_cap = QtcadSolverCapParams(options_cap_raw)
+
+        # Non-specialized attributes.
         solver_params_cap.output_dir = self._options["output_dir"]
         solver_params_cap.make_subdir = self._options["make_subdir"]
-
-        if tol_abs is not None:
-            solver_params_cap.tol_abs = tol_abs
-
-        if max_cpus is not None:
-            solver_params_cap.max_cpus = max_cpus
-
         solver_params_cap.name = self.name
 
         self.solver_params_cap = solver_params_cap
@@ -415,13 +407,13 @@ def main_solve_cap(json_data):
                     protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def main_solve_eigs(json_data, num_modes=QISKIT_NUMBER_EIGENMODES):
+def main_solve_eigs(json_data):
 
     qtcad_wrapper = QQTCADWrapper(json_data=json_data)
     qtcad_wrapper.load_and_validate()
     qtcad_wrapper.setup("PEC")
 
-    qtcad_wrapper.solve_eigs(num_modes=num_modes)
+    qtcad_wrapper.solve_eigs()
 
     Path(qtcad_wrapper._options["output_dir"]).resolve().mkdir(exist_ok=True, parents=True)
     filepath = Path(qtcad_wrapper._options["output_dir"]) / QTCAD_EIG_OUTPUT_FILENAME
