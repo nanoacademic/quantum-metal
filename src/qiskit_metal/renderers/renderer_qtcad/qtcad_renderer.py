@@ -644,7 +644,7 @@ class QQTCADRenderer(QRendererAnalysis):
         if isinstance(self._options["capacitance_raw"], dict):
             self.logger.info("In the renderer's `options` argument, the key `capacitance_raw` was"
                              " defined."
-                             " The capacitance solver parameters defined using the standard"
+                             " Any capacitance solver parameters defined using the standard"
                              " `capacitance` key are going to be overwritten.")
 
         if not isinstance(self._options["maxwell_emode_raw"], (type(None), dict)):
@@ -658,7 +658,7 @@ class QQTCADRenderer(QRendererAnalysis):
         if isinstance(self._options["maxwell_emode_raw"], dict):
             self.logger.info("In the renderer's `options` argument, the key `maxwell_emode_raw`"
                              " was defined."
-                             " The Maxwell eigemode solver parameters defined using the standard"
+                             " Any Maxwell eigemode solver parameters defined using the standard"
                              " `maxwell_emode` key are going to be overwritten.")
 
     def export_parameters(self, json_filepath=None):
