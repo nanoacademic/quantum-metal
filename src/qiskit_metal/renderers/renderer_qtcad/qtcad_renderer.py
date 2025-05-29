@@ -192,14 +192,6 @@ class QQTCADRenderer(QRendererAnalysis):
     def check_environment(self) -> bool:
         """Check if QTCAD is able to fully run as a renderer."""
 
-        # ParaView has a Python API, but usually it is not integrated into
-        # users’ Python environment.
-        self._check_paraview = shutil.which("paraview") is not None
-        if not self._check_paraview:
-            self.logger.warning(
-                "ParaView was not found in the user’s path."
-                " Please install it if you want post-processing visualization.")
-
         return True
 
     def render_design(
@@ -613,20 +605,6 @@ class QQTCADRenderer(QRendererAnalysis):
         Path(self.mesh_file).parent.resolve().mkdir(exist_ok=True, parents=True)
         self.gmsh.export_mesh(self.mesh_file, scaling_factor=1)
 
-    def display_post_processing_data(self, signal_conductor: str) -> None:
-        """Post-process the data output by QTCAD in ParaView.
-
-        Args:
-            signal_conductor (str): Signal conductor for post-processing.
-        """
-        if signal_conductor not in self.signal_conductors:
-            self.logger.error(
-                f"No signal conductor “{self.signal_conductors}” found in the model."
-                " The signal conductors defined in this model are:\n"
-                ", ".join([f'"{cond}"' for cond in self.signal_conductors]))
-        else:
-            arguments = ["paraview", self.post_process_files[signal_conductor]]
-            subprocess.call(arguments, cwd=self.output_dir)
 
     def export_parameters(self, json_filepath=None):
         """Exports parameters that are required for QTCAD simulations as a JSON file."""
