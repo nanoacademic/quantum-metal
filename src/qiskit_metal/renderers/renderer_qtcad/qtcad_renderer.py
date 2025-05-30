@@ -634,32 +634,34 @@ class QQTCADRenderer(QRendererAnalysis):
 
     def _validate_options(self):
         if not isinstance(self._options["capacitance_raw"], (type(None), dict)):
-            error = TypeError("`QQTCADRenderer.capacitance_raw` should either be a dictionary"
-                              " with the parameters allowed by"
-                              " `qtcad.device.maxwell_eigenmode.SolverParams` or left unset."
-                              " Please check the `options` parameters used to instantiate the"
-                              " QTCAD renderer.")
-            self.logger.error(error)
-            raise error
+            error_msg = TypeError("`QQTCADRenderer.capacitance_raw` should either be a dictionary"
+                                  " with the parameters allowed by"
+                                  " `qtcad.device.maxwell_eigenmode.SolverParams` or left unset."
+                                  " Please check the `options` parameters used to instantiate the"
+                                  " QTCAD renderer.")
+            self.logger.error(error_msg)
+            raise error_msg
         if isinstance(self._options["capacitance_raw"], dict):
-            self.logger.info("In the renderer's `options` argument, the key `capacitance_raw` was"
-                             " defined."
-                             " Any capacitance solver parameters defined using the standard"
-                             " `capacitance` key are going to be overwritten.")
+            warning_msg = ("In the renderer's `options` argument, the key `capacitance_raw` was"
+                           " defined."
+                           " Any capacitance solver parameters defined using the standard"
+                           " `capacitance` key are going to be overwritten.")
+            self.logger.warning(warning_msg)
 
         if not isinstance(self._options["maxwell_emode_raw"], (type(None), dict)):
-            error = TypeError("`QQTCADRenderer.maxwell_emode_raw` should either be a dictionary"
-                              " with the parameters allowed by"
-                              " `qtcad.device.maxwell_eigenmode.SolverParams` or left unset."
-                              " Please check the `options` parameters used to instantiate the"
-                              " QTCAD renderer.")
-            self.logger.error(error)
-            raise error
+            error_msg = TypeError("`QQTCADRenderer.maxwell_emode_raw` should either be a"
+                                  " dictionary with the parameters allowed by"
+                                  " `qtcad.device.maxwell_eigenmode.SolverParams` or left unset."
+                                  " Please check the `options` parameters used to instantiate the"
+                                  " QTCAD renderer.")
+            self.logger.error(error_msg)
+            raise error_msg
         if isinstance(self._options["maxwell_emode_raw"], dict):
-            self.logger.info("In the renderer's `options` argument, the key `maxwell_emode_raw`"
-                             " was defined."
-                             " Any Maxwell eigemode solver parameters defined using the standard"
-                             " `maxwell_emode` key are going to be overwritten.")
+            warning_msg = ("In the renderer's `options` argument, the key `maxwell_emode_raw`"
+                           " was defined."
+                           " Any Maxwell eigemode solver parameters defined using the standard"
+                           " `maxwell_emode` key are going to be overwritten.")
+            self.logger.warning(warning_msg)
 
     def export_parameters(self, json_filepath=None):
         """Exports parameters that are required for QTCAD simulations as a JSON file."""
