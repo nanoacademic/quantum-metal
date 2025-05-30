@@ -648,10 +648,11 @@ class QQTCADRenderer(QRendererAnalysis):
             self.logger.error(error_msg)
             raise error_msg
         if isinstance(self._options["capacitance_raw"], dict):
-            warning_msg = ("In the renderer's `options` argument, the key `capacitance_raw` was"
-                           " defined."
-                           " Any capacitance solver parameters defined using the standard"
-                           " `capacitance` key are going to be overwritten.")
+            warning_msg = (
+                "In the renderer's `options` argument, `capacitance_raw` was defined."
+                " Any capacitance solver parameters defined using the standard"
+                " `capacitance` key are going to be overwritten by `capacitance_raw` and its"
+                " defaults.")
             self.logger.warning(warning_msg)
 
         if not isinstance(self._options["maxwell_emode_raw"], (type(None), dict)):
@@ -663,10 +664,11 @@ class QQTCADRenderer(QRendererAnalysis):
             self.logger.error(error_msg)
             raise error_msg
         if isinstance(self._options["maxwell_emode_raw"], dict):
-            warning_msg = ("In the renderer's `options` argument, the key `maxwell_emode_raw`"
-                           " was defined."
-                           " Any Maxwell eigemode solver parameters defined using the standard"
-                           " `maxwell_emode` key are going to be overwritten.")
+            warning_msg = (
+                "In the renderer's `options` argument, `maxwell_emode_raw` was defined."
+                " Any Maxwell eigenmode solver parameters defined using the standard"
+                " `maxwell_emode` key are going to be overwritten by `maxwell_emode_raw` and its"
+                " defaults.")
             self.logger.warning(warning_msg)
 
     def export_parameters(self, json_filepath=None):
