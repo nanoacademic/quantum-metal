@@ -69,14 +69,17 @@ class QQTCADRenderer(QRendererAnalysis):
 
         * capacitance_raw -- Dictionary of parameters to be passed directly to QTCAD's capacitance
                              extractor solver via `qtcad.device.capacitance.SolverParams`.
-                             Overwrites `QQTCADRenderer.capacitance`'s parameters.
+                             Overwrites `QQTCADRenderer.capacitance`'s parameters such that
+                             _any_ parameters from `capacitance` are ignored (see note), with
+                             the defaults from `qtcad.device.capacitance.SolverParams` (see its
+                             docstring for their values) taking precedence, with the exception of
+                             `output_dir`, `make_subdir` and `name`, which are defined by the
+                             parameters of `QQTCADRenderer`.
 
             Note:
                 For users who want full control of the solver, with `QQTCADRenderer.capacitance`
                 being enough for most applications. The keys should be the parameters accepted by
-                `qtcad.device.capacitance.SolverParams`. The exceptions are the parameters
-                `output_dir`, `make_subdir` and `name`, which will be defined from
-                `QQTCADRenderer`'s own parameters.
+                `qtcad.device.capacitance.SolverParams`.
 
         * maxwell_emode -- Dictionary of parameters specific to the Maxwell eigenmode
                            extractor.
@@ -90,14 +93,17 @@ class QQTCADRenderer(QRendererAnalysis):
         * maxwell_emode_raw -- Dictionary of parameters to be passed directly to QTCAD's Maxwell
                                eigenmode extractor solver via
                                `qtcad.device.maxwell_eigenmode.SolverParams`.
-                               Overwrites `QQTCADRenderer.maxwell_emode`'s parameters.
+                               Overwrites `QQTCADRenderer.maxwell_emode`'s parameters such that
+                             _any_ parameters from `capacitance` are ignored (see note), with
+                             the defaults from `qtcad.device.capacitance.SolverParams` (see its
+                             docstring for their values) taking precedence, with the exception of
+                             `output_dir`, `make_subdir` and `name`, which are defined by the
+                             parameters of `QQTCADRenderer`.
 
             Note:
                 For users who want full control of the solver, with
                 `QQTCADRenderer.maxwell_eigenmode` being enough for most applications. The keys
                 should be the parameters accepted by `qtcad.device.maxwell_eigenmode.SolverParams`.
-                The exceptions are the parameters `output_dir`, `make_subdir` and `name`, which
-                will be defined from `QQTCADRenderer`'s own parameters.
     """
 
     # The defaults of a renderer must be in a dict named `default_options`. They
