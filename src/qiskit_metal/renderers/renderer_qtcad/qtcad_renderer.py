@@ -116,7 +116,7 @@ class QQTCADRenderer(QRendererAnalysis):
         output_dir=".",
         geo_filepath="qiskit_device.xao",
         mesh_filepath="qiskit_device.msh4",
-        mesh_scale=1-3,
+        mesh_scale=1e-3,
         materials=default_materials,
         make_subdir=True,
         capacitance=dict(
