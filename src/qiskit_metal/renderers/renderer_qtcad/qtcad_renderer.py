@@ -239,6 +239,7 @@ class QQTCADRenderer(QRendererAnalysis):
         initial_mesh_h_min: str = "150um",
         initial_mesh_h_max: str = "150um",
         meshing_algorithm: int = 10,
+        num_threads: int = 1,
     ):
         """Render the design in Gmsh and apply changes to modify the geometries
         according to the type of simulation. Simulation parameters provided by
@@ -266,6 +267,11 @@ class QQTCADRenderer(QRendererAnalysis):
             meshing_algorithm (int, optional): Gmsh's 3D mesh algorithm. The
               possible values are 1 (Delaunay), 3 (initial mesh only),
               4 (frontal), 7 (MMG3D), 9 (R-tree), 10 (HXT). (Default: 10)
+            num_threads (int, optional): Number of threads for
+              parallel meshing. Defaults to 1, which guarantees the meshes to
+              be generated to be deterministic (for a given system
+              configuration and environment) when using the Delaunay or HXT
+              meshing algorithms. The latter being the recommended one.
         """
 
         # Minimal spacing between the vacuum box surface and the sample holder box.
@@ -277,6 +283,9 @@ class QQTCADRenderer(QRendererAnalysis):
         self.gmsh.options.mesh.min_size = initial_mesh_h_min
         self.gmsh.options.mesh.max_size = initial_mesh_h_max
         self.gmsh.options.mesh.algorithm_3d = meshing_algorithm
+        # Gmsh's algorithms are deterministic when meshing using a single
+        # thread, vide https://gitlab.onelab.info/gmsh/gmsh/-/issues/2255.
+        self.gmsh.options.mesh.num_threads = num_threads
 
         # For handling the case when the user wants to use
         # QQTCADRenderer from design.renderers.qtcad instance.
