@@ -1357,12 +1357,12 @@ class QGmshRenderer(QRenderer):
 
     def export_geometry(self, filepath: str):
         """Export the Gmsh geometry as a geo_unrolled, BREP or XAO file.
-        Supported formats: .geo_unrolled, .brep, .xao
+        Supported formats: .geo_unrolled, .xao
 
         Args:
             filepath (str): path of the file to export geometry to
         """
-        valid_file_exts = ["geo_unrolled", "brep", "xao"]
+        valid_file_exts = ["geo_unrolled", "xao"]
         file_ext = filepath.split(".")[-1]
         if file_ext not in valid_file_exts:
             self.logger.error(
