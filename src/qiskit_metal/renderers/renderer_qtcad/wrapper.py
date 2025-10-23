@@ -29,6 +29,7 @@ class QTCADInputParams:
 
     gmsh_physical_groups: dict
     _conductors: dict
+    _inductive_ports: dict
     sample_holder: bool
     qtcad_options: dict
 
@@ -49,6 +50,7 @@ class QQTCADWrapper():
         self.json_data = json_data
         self.gmsh_physical_groups = None
         self._conductors = None
+        self._inductive_ports = None
         self.sample_holder = None
         self.qtcad_options = None
 
@@ -60,6 +62,7 @@ class QQTCADWrapper():
         validated = QTCADInputParams(**data)
         self.gmsh_physical_groups = validated.gmsh_physical_groups
         self._conductors = validated._conductors
+        self._inductive_ports = validated._inductive_ports
         self.sample_holder = validated.sample_holder
         self._options = validated.qtcad_options
 
@@ -147,6 +150,7 @@ class QQTCADWrapper():
         self.signal_conductors = dict()
         ground_conductor = []
         self.conductors = []
+        self.inductive_ports = []
 
         for layer, ph_geoms in self.gmsh_physical_groups.items():
             # ph_geoms: set of (label, Gmsh physical group ID)
@@ -190,6 +194,15 @@ class QQTCADWrapper():
         elif bnd_conditions == "PEC":
             for boundary in self.conductors:
                 self.device.new_pec_bnd(boundary)
+
+        # Set boundary conditions for the inductive ports (tunnelling
+        # junctions). The port parameters are fully specified by the
+        # dictionaries created by `QQTCADRenderer.set_up_junction`.
+        for qubit_name, junction_params in self._inductive_ports.items():
+            # Ignore junctions that were not set up.
+            if junction_params["bnd_spec"] is None:
+                continue
+            self.device.new_inductor(**junction_params)
 
         # FIXME Whilst we do not have a way of setting infinity boundary
         # conditions, let us not touch on `vacuum_box_sfs`, which then implies

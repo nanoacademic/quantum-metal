@@ -19,9 +19,12 @@ import pandas as pd
 import json
 import pickle
 import re
+
 import pyvista as pv
+import shapely
 
 from qiskit_metal import Dict, draw
+from qiskit_metal.toolbox_metal.parsing import parse_entry
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
 from qiskit_metal.renderers.renderer_gmsh.gmsh_renderer import QGmshRenderer
 from qiskit_metal.designs import MultiPlanar
@@ -142,6 +145,13 @@ class QQTCADRenderer(QRendererAnalysis):
         ),
         maxwell_emode_raw=None,
     )
+    default_junction_params = dict(
+        bnd_spec = None,
+        inductance = None,
+        length = None,
+        width = None,
+        dir = None,
+    )
 
     name = "qtcad"
     """name"""
@@ -158,7 +168,7 @@ class QQTCADRenderer(QRendererAnalysis):
             design ('MultiPlanar'): The design.
             layer_types (Union[dict, None]): The type of layer in the format:
               dict(metal=[...], dielectric=[...]). Defaults to `None`.
-            initiate (bool): True to initiate the renderer. Defaults to `False`.
+            initiate (bool): True to initiate the renderer. Defaults to `True`.
             options (Dict, optional): Used to override default options. Defaults
               to `None`.
         """
@@ -183,6 +193,20 @@ class QQTCADRenderer(QRendererAnalysis):
                     "geo_filepath",
             ]:
                 self._options[arg] = None
+
+        # Initialize the dictionary with QTCAD-specific properties associated
+        # to the tunnelling junctions of each qubit.
+        self.junction_params = dict()
+        for junction in self.design.qgeometry.tables["junction"].iloc:
+            qubit_name = self.design._components[junction.component].name
+            if qubit_name in self.junction_params:
+                error_msg = ValueError(
+                    "Currently, QQTCADRenderer does not support multiple"
+                    " tunnelling junctions per qubit.")
+                self.logger.error(error_msg)
+                raise error_msg
+            self.junction_params[
+                qubit_name] = self.default_junction_params.copy()
 
     @property
     def initialized(self):
@@ -465,6 +489,124 @@ class QQTCADRenderer(QRendererAnalysis):
 
         return netlists
 
+    def _current_direction(
+            self,
+            line: shapely.geometry.linestring.LineString) -> Union[str, None]:
+        """Find the direction to be assumed for an element’s current flow.
+
+        We assume a rectangular tunnelling junction and determine its current
+        flow’s direction based on its geometry.
+
+        Args:
+            line (shapely.geometry.linestring.LineString): The `LineString`
+              that defines a junction component.
+
+        Returns:
+            Union[str, None]: the current flow’s direction: `"x"`, `"y"`, with
+              `None` being returned if the element is not defined along either
+              the x or y directions.
+        """
+        # The two elements of `line.coords.xy` give us the coordinates
+        # (x0, x1) and (y0, y1). When flattened and operated by `np.diff`, we
+        # obtain the vector [x1-x0, y1-y0], which we can compare with unit
+        # vectors to determine its direction.
+        direction_vector = np.diff(line.coords.xy).flatten()
+
+        # Unit vectors.
+        unit_x = np.array([1, 0])
+        unit_y = np.array([0, 1])
+
+        # Compare inner products to distinguish the directions.
+        if np.isclose(direction_vector @ unit_y, 0):
+            direction = "x"
+        elif np.isclose(direction_vector @ unit_x, 0):
+            direction = "y"
+        else:
+            direction = None
+
+        return direction
+
+    def set_up_junction(self, qubit: str, inductance: float,
+                        length: Union[float, int, str]) -> pd.DataFrame:
+        """Define a qubit’s tunnelling junction (inductive port) properties.
+
+        For eigenmode simulations, the tunnelling junction is described as an
+        inductive port with linear inductance. Whilst the width is computed
+        automatically from the qubit geometry, the length needs to be passed
+        manually.
+
+        Note that, for `QQTCADRenderer`, a design’s
+        `qgeometry.tables['junction']` does not fully describe the properties
+        of the QPU’s tunnelling junctions. One also needs to inspect
+        `QQTCADRenderer.junction_params`, which this method updates.
+
+        Args:
+            qubit (str): The name of the qubit whose junction’s properties
+              we will set up.
+            inductance (float): The inductance (in henries) of the Josephson
+              tunnelling junction approximated as a linear inductor.
+            length (Union[float, int, str]): Length of the inductive port
+              describing the junction. It should be the distance between
+              charge islands or the gap between the island and the ground
+              plane.
+
+        Returns:
+            pd.DataFrame: Table with the properties of the junction.
+        """
+
+        if qubit not in self.junction_params:
+            error_msg = KeyError(f"Qubit labelled ‘{qubit}’ not found.")
+            self.logger.error(error_msg)
+            raise error_msg
+
+        # The name of the physical groups associated to tunnelling junctions
+        # in `QGmshRenderer` always follow the same pattern.
+        junction_surface = f"{qubit}_rect_jj"
+
+        # Access the table with the properties of the first tunnelling
+        # junction of the qubit.
+        junction_table = self.design.components[qubit].qgeometry_table(
+            "junction")
+        junction_qgeom = junction_table.iloc[0]
+
+        # Whilst the width is easily accessible from the qubit’s geometry¹,
+        # there is not a single attribute that stores information on the
+        # length of junctions across all transmon-like components. For
+        # instance, for `qiskit_metal.qlibrary.TransmonPocket` it would be
+        # `pad_gap`, whilst for `qiskit_metal.qlibrary.TransmonCross` is
+        # `cross_gap`.
+        # ¹ Concerning the width, some components may have the specific
+        #   property `inductor_width`, whilst other do not.
+        junction_width = parse_entry(junction_qgeom.width)
+        junction_length = parse_entry(length) / self.options["mesh_scale"]
+
+        # Try to determine the direction for the inductive port’s current
+        # flow.
+        junction_direction = self._current_direction(junction_qgeom.geometry)
+        if junction_direction is None:
+            error_msg = ValueError(
+                "Currently, QQTCADRenderer does not support Josephson"
+                " junctions (inductive ports) not aligned along the x- or"
+                " y-axes.")
+            self.logger.error(error_msg)
+            raise error_msg
+
+        self.junction_params[qubit].update(
+            bnd_spec=junction_surface,
+            inductance=inductance,
+            length=junction_length,
+            width=junction_width,
+            dir=junction_direction,
+        )
+
+        # Create a `pandas.DataFrame` to make easier to inspect the parsed
+        # properties of the junction.
+        junction_params_df = pd.DataFrame.from_dict({
+            key: [value] for key, value in self.junction_params[qubit].items()
+        })
+
+        return junction_params_df
+
     def get_gnd_qgeoms(self, open_pins: Union[list, None] = None) -> list[str]:
         """Obtain a list of qgeometry names associated with pins shorted to
         ground.
@@ -704,6 +846,7 @@ class QQTCADRenderer(QRendererAnalysis):
         data = {
             "gmsh_physical_groups": self.gmsh.physical_groups,
             "_conductors": self.conductors,
+            "_inductive_ports": self.junction_params,
             "sample_holder": self.sample_holder,
             "qtcad_options": {
                 k: v for k, v in self._options.items() if k != "materials"
@@ -810,7 +953,6 @@ class QQTCADRenderer(QRendererAnalysis):
             print(line, end="")
 
         process.wait()
-
 
     def load_qtcad_capacitance_matrix(self, filepath: Union[str, None] = None) -> pd.DataFrame:
         """Load capacitance matrix from file.
