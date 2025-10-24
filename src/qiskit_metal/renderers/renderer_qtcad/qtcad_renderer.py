@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 import json
 import pickle
+import re
+import pyvista as pv
 
 from qiskit_metal import Dict, draw
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
@@ -28,8 +30,16 @@ QISKIT_CAPACITANCE_SCALE = 1e-15
 JSON_FILENAME = "qtcad_data.json"
 QTCAD_CAP_OUTPUT_FILENAME = "qtcad_output_cap.pickle"
 QTCAD_EIG_OUTPUT_FILENAME = "qtcad_output_eigs.pickle"
+# Template string for QTCAD’s eigenmode scalar layers.
+EIGENMODE_LAYER_TEMPLATE = "abs(electric field) [V/m] - mode {n}"
 
 
+def sanitize_string(string: str) -> str:
+    """Remove a string’s non-alphanumeric characters/spaces/underscores/hyphens.
+    """
+    filename = re.sub(r'[^\w\s\-_.]', '', string)
+    filename = filename.replace(' ', '_')
+    return filename
 
 class QQTCADRenderer(QRendererAnalysis):
     """Extends QRendererAnalysis class to use QTCAD’s API with Gmsh’s meshes.
@@ -876,3 +886,174 @@ class QQTCADRenderer(QRendererAnalysis):
 
         return frequencies / 1e9
 
+        """Plot slices of all the eigenmodes stored in a VTU file on a grid.
+
+        Args
+            TODO
+    def plot_eigenmodes(
+        self,
+        vtu_file: str,
+        num_modes: Union[int, None] = None,
+        cmap: str = "magma",
+        log: bool = True,
+        show: bool = True,
+        save: bool = False,
+    ) -> Union[str, None]:
+        """
+
+        if num_modes is None:
+            if self._options.maxwell_emode_raw is None:
+                num_modes = self._options.maxwell_emode["num_modes"]
+            else:
+                num_modes = self._options.maxwell_emode_raw["num_modes"]
+
+        input_file_path = Path(vtu_file)
+        output_file = None
+
+        # Selectively load the relevant arrays from the VTU file.
+        reader = pv.get_reader(input_file_path)
+        # Disable all arrays.
+        reader.disable_all_point_arrays()
+        reader.disable_all_cell_arrays()
+        # Enable the eigenmode-specific arrays and ingest the file.
+        # TODO: Verify if the VTU file has all the layers.
+        for mdx in range(num_modes):
+            reader.enable_point_array(EIGENMODE_LAYER_TEMPLATE.format(n=mdx))
+        mesh = reader.read()
+
+        # Maximum number of axes along the horizontal direction.
+        num_axes_h = 2
+        # Wrap the list with the indices to the eigenmodes and get the
+        # resulting list’s length. This is the desired number of axes along
+        # the vertical direction.
+        modes_wrapped = [
+            list(range(num_modes))[i:i + num_axes_h]
+            for i in range(0, num_modes, num_axes_h)
+        ]
+        num_axes_v = len(modes_wrapped)
+
+        # Set up the plot.
+        window_size = (500 * num_axes_h, 500 * num_axes_v)
+        plotter = pv.Plotter(shape=(num_axes_v, num_axes_h),
+                             window_size=window_size)
+        for vdx in range(num_axes_v):
+            for hdx in range(len(modes_wrapped[vdx])):
+                mdx = modes_wrapped[vdx][hdx]
+                scalar_layer = EIGENMODE_LAYER_TEMPLATE.format(n=mdx)
+                title = f"Eigenmode {mdx+1}"
+
+                # Create slice at z=0.
+                sliced_data = mesh.slice(normal='z', origin=(0, 0, 0))
+
+                plotter.subplot(vdx, hdx)
+                # Add the sliced data.
+                plotter.add_mesh(
+                    sliced_data,
+                    scalars=scalar_layer,
+                    log_scale=log,
+                    cmap=cmap,
+                    # Disable the scalar bar to add a customized one later.
+                    show_scalar_bar=False,
+                )
+                plotter.add_title(title, font_size=11)
+                # Add a custom scalar bar.
+                plotter.add_scalar_bar(
+                    title=f"|E| (V/m), mode {mdx+1}",
+                    position_x=0.15,
+                    position_y=0.05,
+                    width=0.7,
+                    height=0.1,
+                    label_font_size=10,
+                )
+                # Make sure the x-y plane is visible.
+                plotter.view_xy()
+
+        if show:
+            plotter.show()
+        if save:
+            output_file = input_file_path.with_suffix(".png")
+            plotter.screenshot(
+                output_file.resolve(),
+                transparent_background=False,
+            )
+            print(f"Image saved to ‘{output_file.resolve()}’.")
+
+        del mesh
+
+        """Plot a slice at z=0 of a given eigenmode stored in a VTU file.
+        return str(output_file.resolve())
+
+        Args
+            TODO
+    def plot_eigenmode(
+        self,
+        vtu_file: str,
+        n: int = 1,
+        cmap: str = "magma",
+        log: bool = True,
+        show: bool = True,
+        save: bool = False,
+    ) -> Union[str, None]:
+        """
+
+        input_file_path = Path(vtu_file)
+        title = f"Eigenmode {n}"
+        window_size = (1000, 1000)
+
+        # Selectively load the relevant arrays from the VTU file.
+        reader = pv.get_reader(input_file_path)
+        # Disable all arrays.
+        reader.disable_all_point_arrays()
+        reader.disable_all_cell_arrays()
+        # Enable the specific eigenmode array and ingest the file.
+        mdx = n - 1
+        scalar_layer = EIGENMODE_LAYER_TEMPLATE.format(n=mdx)
+        reader.enable_point_array(scalar_layer)
+        mesh = reader.read()
+
+        # Create slice at z=0.
+        sliced_data = mesh.slice(normal='z', origin=(0, 0, 0))
+
+        # Set up the plot.
+        plotter = pv.Plotter(window_size=window_size)
+        # Add the sliced data.
+        plotter.add_mesh(
+            sliced_data,
+            scalars=scalar_layer,
+            log_scale=log,
+            cmap=cmap,
+            # Disable the scalar bar to add a customized one later.
+            show_scalar_bar=False,
+        )
+        plotter.add_title(title, font_size=11)
+        # Add a custom scalar bar.
+        plotter.add_scalar_bar(
+            title=f"|E| (V/m), mode {mdx+1}",
+            position_x=0.15,
+            position_y=0.05,
+            width=0.7,
+            height=0.1,
+            label_font_size=10,
+        )
+        # Make sure the x-y plane is visible.
+        plotter.view_xy()
+
+        if show:
+            plotter.show()
+        if save:
+            sanitized_layer_name = sanitize_string(
+                EIGENMODE_LAYER_TEMPLATE.format(n=mdx + 1))
+            output_file = input_file_path.with_name(
+                f"{input_file_path.stem}-{sanitized_layer_name}.png")
+            plotter.screenshot(
+                output_file.resolve(),
+                window_size=window_size,
+                transparent_background=False,
+            )
+            print(
+                f"Image of the eigenmode {n} saved to ‘{output_file.resolve()}’."
+            )
+
+        del mesh
+
+        return str(output_file.resolve())
