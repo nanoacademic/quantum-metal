@@ -886,10 +886,6 @@ class QQTCADRenderer(QRendererAnalysis):
 
         return frequencies / 1e9
 
-        """Plot slices of all the eigenmodes stored in a VTU file on a grid.
-
-        Args
-            TODO
     def plot_eigenmodes(
         self,
         vtu_file: str,
@@ -899,6 +895,30 @@ class QQTCADRenderer(QRendererAnalysis):
         show: bool = True,
         save: bool = False,
     ) -> Union[str, None]:
+        """Plot a grid with z=0 slices of all the eigenmodes stored in a VTU file.
+
+        PyVista is used to generate the plots of the absolute value of the electric
+        field associated to different Maxwell eigenmodes.
+
+        Args:
+            vtu_file (str): Path to the VTU file containing QTCAD’s electromagnetic
+                fields.
+            num_modes (Union[int, None], optional): The number of modes to plot,
+                starting from the first one. Defaults to `None`, which plots all modes.
+                However, if loading a VTU file from a different simulation, it must be
+                set accordingly.
+            cmap (str, optional): Name of the colour map to be used. Must be a colour
+                map supported by PyVista. Defaults to `"magma"`.
+            log (bool, optional): Whether to use a logarithmic scale when mapping data
+                to colours. Defaults to `True`.
+            show (bool, optional): Whether to display the plot of the electric fields.
+                Defaults to `True`.
+            save (bool, optional): Whether to save the plot of the electric fields as a
+                PNG file. Defaults to `True`.
+
+        Returns:
+            Union[str, None]: `str` with the path to the exported image file if `save`
+                was enabled. Otherwise, `None`.
         """
 
         if num_modes is None:
@@ -980,11 +1000,8 @@ class QQTCADRenderer(QRendererAnalysis):
 
         del mesh
 
-        """Plot a slice at z=0 of a given eigenmode stored in a VTU file.
         return str(output_file.resolve())
 
-        Args
-            TODO
     def plot_eigenmode(
         self,
         vtu_file: str,
@@ -994,6 +1011,28 @@ class QQTCADRenderer(QRendererAnalysis):
         show: bool = True,
         save: bool = False,
     ) -> Union[str, None]:
+        """Plot the z=0 slice of a given eigenmode stored in a VTU file.
+
+        PyVista is used to generate the plot of the absolute value of the electric
+        field associated to the desired Maxwell eigenmode.
+
+        Args:
+            vtu_file (str): Path to the VTU file containing QTCAD’s electromagnetic
+                fields.
+            n (int): Index of the desired eigenmode. Indexing starts from 1, the ground
+                state.
+            cmap (str, optional): Name of the colour map to be used. Must be a colour
+                map supported by PyVista. Defaults to `"magma"`.
+            log (bool, optional): Whether to use a logarithmic scale when mapping data
+                to colours. Defaults to `True`.
+            show (bool, optional): Whether to display the plot of the electric field.
+                Defaults to `True`.
+            save (bool, optional): Whether to save the plot of the electric field as a
+                PNG file. Defaults to `True`.
+
+        Returns:
+            Union[str, None]: `str` with the path to the exported image file if `save`
+                was enabled. Otherwise, `None`.
         """
 
         input_file_path = Path(vtu_file)
