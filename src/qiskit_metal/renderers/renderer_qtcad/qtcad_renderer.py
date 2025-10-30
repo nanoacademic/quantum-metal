@@ -39,10 +39,17 @@ EIGENMODE_LAYER_TEMPLATE = "abs(electric field) [V/m] - mode {n}"
 
 def sanitize_string(string: str) -> str:
     """Remove a string’s non-alphanumeric characters/spaces/underscores/hyphens.
+
+    Args:
+        string (str): The input string to be parsed.
+
+    Returns:
+        str: The parsed string.
     """
     filename = re.sub(r'[^\w\s\-_.]', '', string)
     filename = filename.replace(' ', '_')
     return filename
+
 
 class QQTCADRenderer(QRendererAnalysis):
     """Extends QRendererAnalysis class to use QTCAD’s API with Gmsh’s meshes.
