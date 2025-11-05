@@ -23,18 +23,12 @@ import re
 import pyvista as pv
 import shapely
 
+from .qtcad_base import QtcadInputParams, QtcadConstants
 from qiskit_metal import Dict, draw
 from qiskit_metal.toolbox_metal.parsing import parse_entry
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
 from qiskit_metal.renderers.renderer_gmsh.gmsh_renderer import QGmshRenderer
 from qiskit_metal.designs import MultiPlanar
-
-QISKIT_CAPACITANCE_SCALE = 1e-15
-JSON_FILENAME = "qtcad_data.json"
-QTCAD_CAP_OUTPUT_FILENAME = "qtcad_output_cap.pickle"
-QTCAD_EIG_OUTPUT_FILENAME = "qtcad_output_eigs.pickle"
-# Template string for QTCAD’s eigenmode scalar layers.
-EIGENMODE_LAYER_TEMPLATE = "abs(electric field) [V/m] - mode {n}"
 
 
 def sanitize_string(string: str) -> str:
@@ -188,6 +182,9 @@ class QQTCADRenderer(QRendererAnalysis):
 
         self.mesh_file = None
         self.json_filepath = None
+        self.cap_refined_mesh_file = None
+        self.eig_refined_mesh_file = None
+        self.eig_field_file = None
 
         # If not using adaptive meshing, set adaptive parameters to None.
         # FIXME In the future, it would be desirable to have a flag in the
@@ -846,7 +843,8 @@ class QQTCADRenderer(QRendererAnalysis):
         self._validate_options()
 
         if json_filepath is None:
-            json_filepath = Path(self._options["output_dir"]) / JSON_FILENAME
+            json_filepath = Path(self._options["output_dir"]
+                                ) / QtcadConstants.DEFAULT_JSON_FILENAME
 
         self.json_filepath = json_filepath
 
@@ -858,6 +856,9 @@ class QQTCADRenderer(QRendererAnalysis):
             "qtcad_options": {
                 k: v for k, v in self._options.items() if k != "materials"
             },
+            "cap_refined_mesh_file": None,
+            "eig_refined_mesh_file": None,
+            "eig_field_file": None,
         }
 
         # Guarantee the path to the JSON file exists.
@@ -892,7 +893,7 @@ class QQTCADRenderer(QRendererAnalysis):
         """Calls wrapper file in a specific environment
 
             Args:
-                solve_for (str): Solve for `cap` (capacitance matrix) or `eigs`
+                solve_for (str): Solve for `"cap"` (capacitance matrix) or `"eigs"`
                   (Maxwell eigenmodes).
                 json_filepath (str): Path to the necessary parameters for the solver.
                   Defaults to the value used when exporting them using
@@ -961,6 +962,55 @@ class QQTCADRenderer(QRendererAnalysis):
 
         process.wait()
 
+        # Load additional data from QTCAD’s eigenmode solver.
+        self._load_post_simulation_data(solve_for, json_filepath)
+
+    def _load_post_simulation_data(
+        self,
+        solver: str,
+        json_filepath: str | Path,
+    ) -> None:
+        """Load specific post-simulation data from QTCAD’s solvers.
+
+        QTCAD’s capacitance and Maxwell eigenmode solvers store additional data
+        associated to field (eigenmode only) and refined mesh (capacitance and
+        eigenmode) files after simulations are run. These data are useful for
+        additional analyses.
+
+        Args:
+            solver (str): Which solver to load the associated post-simulation data.
+                Should be `"cap"` (capacitance matrix) or `"eigs"` (Maxwell eigenmodes).
+            json_filepath (str): Path to JSON file with post-simulation data written by
+                QTCAD’s wrapper.
+        """
+
+        with open(json_filepath) as f:
+            json_data = json.load(f)
+
+        validated = QtcadInputParams(**json_data)
+        error_msg_template = ("Unable to load post-simulation data from QTCAD’s"
+                              " {solver} solver.")
+        if solver == "eigs":
+            self.eig_refined_mesh_file = validated.eig_refined_mesh_file
+            self.eig_field_file = validated.eig_field_file
+            if None in (self.eig_refined_mesh_file, self.eig_field_file):
+                error_msg = ValueError(
+                    error_msg_template.format(solver="eigenmode"))
+                self.logger.error(error_msg)
+                raise error_msg
+            self.eig_refined_mesh_file = Path(
+                validated.eig_refined_mesh_file).resolve()
+            self.eig_field_file = Path(validated.eig_field_file).resolve()
+        elif solver == "cap":
+            self.cap_refined_mesh_file = validated.cap_refined_mesh_file
+            if self.cap_refined_mesh_file is None:
+                error_msg = ValueError(
+                    error_msg_template.format(solver="capacitance"))
+                self.logger.error(error_msg)
+                raise error_msg
+            self.cap_refined_mesh_file = Path(
+                validated.cap_refined_mesh_file).resolve()
+
     def load_qtcad_capacitance_matrix(self, filepath: Union[str, None] = None) -> pd.DataFrame:
         """Load capacitance matrix from file.
 
@@ -973,7 +1023,8 @@ class QQTCADRenderer(QRendererAnalysis):
             pd.DataFrame: Table containing the capacitance matrix.
         """
         if filepath is None:
-            filepath = Path(self._options["output_dir"]) / QTCAD_CAP_OUTPUT_FILENAME
+            filepath = Path(self._options["output_dir"]
+                           ) / QtcadConstants.QTCAD_CAP_OUTPUT_FILENAME
 
         input_file = Path(filepath)
         if not input_file.exists():
@@ -1015,7 +1066,8 @@ class QQTCADRenderer(QRendererAnalysis):
             nd.ndarray: Ordered list of Maxwell eigenmodes.
         """
         if filepath is None:
-            filepath = Path(self._options["output_dir"]) / QTCAD_EIG_OUTPUT_FILENAME
+            filepath = Path(self._options["output_dir"]
+                           ) / QtcadConstants.QTCAD_EIG_OUTPUT_FILENAME
 
         input_file = Path(filepath)
         if not input_file.exists():
@@ -1037,25 +1089,19 @@ class QQTCADRenderer(QRendererAnalysis):
 
     def plot_eigenmodes(
         self,
-        vtu_file: str,
-        num_modes: Union[int, None] = None,
         cmap: str = "magma",
         log: bool = True,
         show: bool = True,
         save: bool = False,
-    ) -> Union[str, None]:
+        vtu_file: str | Path | None = None,
+        num_modes: int | None = None,
+    ) -> Path | None:
         """Plot a grid with z=0 slices of all the eigenmodes stored in a VTU file.
 
         PyVista is used to generate the plots of the absolute value of the electric
         field associated to different Maxwell eigenmodes.
 
         Args:
-            vtu_file (str): Path to the VTU file containing QTCAD’s electromagnetic
-                fields.
-            num_modes (Union[int, None], optional): The number of modes to plot,
-                starting from the first one. Defaults to `None`, which plots all modes.
-                However, if loading a VTU file from a different simulation, it must be
-                set accordingly.
             cmap (str, optional): Name of the colour map to be used. Must be a colour
                 map supported by PyVista. Defaults to `"magma"`.
             log (bool, optional): Whether to use a logarithmic scale when mapping data
@@ -1064,10 +1110,19 @@ class QQTCADRenderer(QRendererAnalysis):
                 Defaults to `True`.
             save (bool, optional): Whether to save the plot of the electric fields as a
                 PNG file. Defaults to `True`.
+            vtu_file (str | Path | None): Path to a VTU file containing QTCAD’s
+                electromagnetic fields. If `None`, will automatically consider the VTU
+                file generated by the current `QQTCADRenderer` set up. Must be passed
+                only if loading results from a different simulation set up.
+            num_modes (int | None, optional): The number of modes to plot,
+                starting from the first one. Defaults to `None`, which plots all modes
+                based on the current `QQTCADRenderer` set up. However, if loading a VTU
+                file from a different simulation by passing `vtu_file`, it must be set
+                accordingly.
 
         Returns:
-            Union[str, None]: `str` with the path to the exported image file if `save`
-                was enabled. Otherwise, `None`.
+            Path | None: Path to the exported image file if `save` was enabled.
+                Otherwise, `None`.
         """
 
         if num_modes is None:
@@ -1076,7 +1131,10 @@ class QQTCADRenderer(QRendererAnalysis):
             else:
                 num_modes = self._options.maxwell_emode_raw["num_modes"]
 
-        input_file_path = Path(vtu_file)
+        if vtu_file is None:
+            input_file_path = Path(self.eig_field_file)
+        else:
+            input_file_path = Path(vtu_file)
         output_file = None
 
         # Selectively load the relevant arrays from the VTU file.
@@ -1087,7 +1145,8 @@ class QQTCADRenderer(QRendererAnalysis):
         # Enable the eigenmode-specific arrays and ingest the file.
         # TODO: Verify if the VTU file has all the layers.
         for mdx in range(num_modes):
-            reader.enable_point_array(EIGENMODE_LAYER_TEMPLATE.format(n=mdx))
+            reader.enable_point_array(
+                QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx))
         mesh = reader.read()
 
         # Maximum number of axes along the horizontal direction.
@@ -1108,7 +1167,8 @@ class QQTCADRenderer(QRendererAnalysis):
         for vdx in range(num_axes_v):
             for hdx in range(len(modes_wrapped[vdx])):
                 mdx = modes_wrapped[vdx][hdx]
-                scalar_layer = EIGENMODE_LAYER_TEMPLATE.format(n=mdx)
+                scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(
+                    n=mdx)
                 title = f"Eigenmode {mdx+1}"
 
                 # Create slice at z=0.
@@ -1140,7 +1200,7 @@ class QQTCADRenderer(QRendererAnalysis):
         if show:
             plotter.show()
         if save:
-            output_file = input_file_path.with_suffix(".png")
+            output_file = input_file_path.with_suffix(".png").resolve()
             plotter.screenshot(
                 output_file.resolve(),
                 transparent_background=False,
@@ -1149,25 +1209,23 @@ class QQTCADRenderer(QRendererAnalysis):
 
         del mesh
 
-        return str(output_file.resolve())
+        return output_file
 
     def plot_eigenmode(
         self,
-        vtu_file: str,
         n: int = 1,
         cmap: str = "magma",
         log: bool = True,
         show: bool = True,
         save: bool = False,
-    ) -> Union[str, None]:
+        vtu_file: str | Path | None = None,
+    ) -> Path | None:
         """Plot the z=0 slice of a given eigenmode stored in a VTU file.
 
         PyVista is used to generate the plot of the absolute value of the electric
         field associated to the desired Maxwell eigenmode.
 
         Args:
-            vtu_file (str): Path to the VTU file containing QTCAD’s electromagnetic
-                fields.
             n (int): Index of the desired eigenmode. Indexing starts from 1, the ground
                 state.
             cmap (str, optional): Name of the colour map to be used. Must be a colour
@@ -1178,13 +1236,21 @@ class QQTCADRenderer(QRendererAnalysis):
                 Defaults to `True`.
             save (bool, optional): Whether to save the plot of the electric field as a
                 PNG file. Defaults to `True`.
+            vtu_file (str | Path | None): Path to a VTU file containing QTCAD’s
+                electromagnetic fields. If `None`, will automatically consider the VTU
+                file generated by the current `QQTCADRenderer` set up. Must be passed
+                only if loading results from a different simulation set up.
 
         Returns:
             Union[str, None]: `str` with the path to the exported image file if `save`
                 was enabled. Otherwise, `None`.
         """
 
-        input_file_path = Path(vtu_file)
+        if vtu_file is None:
+            input_file_path = Path(self.eig_field_file)
+        else:
+            input_file_path = Path(vtu_file)
+        output_file = None
         title = f"Eigenmode {n}"
         window_size = (1000, 1000)
 
@@ -1195,7 +1261,7 @@ class QQTCADRenderer(QRendererAnalysis):
         reader.disable_all_cell_arrays()
         # Enable the specific eigenmode array and ingest the file.
         mdx = n - 1
-        scalar_layer = EIGENMODE_LAYER_TEMPLATE.format(n=mdx)
+        scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx)
         reader.enable_point_array(scalar_layer)
         mesh = reader.read()
 
@@ -1230,9 +1296,9 @@ class QQTCADRenderer(QRendererAnalysis):
             plotter.show()
         if save:
             sanitized_layer_name = sanitize_string(
-                EIGENMODE_LAYER_TEMPLATE.format(n=mdx + 1))
+                QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx + 1))
             output_file = input_file_path.with_name(
-                f"{input_file_path.stem}-{sanitized_layer_name}.png")
+                f"{input_file_path.stem}-{sanitized_layer_name}.png").resolve()
             plotter.screenshot(
                 output_file.resolve(),
                 window_size=window_size,
@@ -1244,4 +1310,4 @@ class QQTCADRenderer(QRendererAnalysis):
 
         del mesh
 
-        return str(output_file.resolve())
+        return output_file

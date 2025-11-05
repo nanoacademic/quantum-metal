@@ -83,6 +83,17 @@ GMSH Renderer
 
 
 
+QTCAD Renderer
+--------------
+
+.. autosummary::
+    :toctree: ../stubs/
+
+    QQTCADRenderer
+    QtcadConstants
+
+
+
 """
 
 from qiskit_metal.renderers.setup_default import setup_renderers
@@ -121,6 +132,9 @@ if config.is_building_docs():
 
     from qiskit_metal.renderers.renderer_gmsh.gmsh_utils import Vec3DArray
     from qiskit_metal.renderers.renderer_gmsh.gmsh_renderer import QGmshRenderer
+
+    from qiskit_metal.renderers.renderer_qtcad.qtcad_renderer import QQTCADRenderer
+    from qiskit_metal.renderers.renderer_qtcad.qtcad_base import QtcadConstants
 
     from qiskit_metal.renderers.renderer_ansys_pyaedt.pyaedt_base import QPyaedt
     from qiskit_metal.renderers.renderer_ansys_pyaedt.q3d_renderer_aedt import (
