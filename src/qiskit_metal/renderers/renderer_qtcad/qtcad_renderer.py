@@ -972,16 +972,16 @@ class QQTCADRenderer(QRendererAnalysis):
     ) -> None:
         """Load specific post-simulation data from QTCAD’s solvers.
 
-        QTCAD’s capacitance and Maxwell eigenmode solvers store additional data
-        associated to field (eigenmode only) and refined mesh (capacitance and
-        eigenmode) files after simulations are run. These data are useful for
-        additional analyses.
+        QTCAD’s capacitance and Maxwell eigenmode solvers register additional data
+        associated to electromagnetic field (eigenmode only) and refined mesh
+        (capacitance and eigenmode) files after simulations are run. These data are
+        useful for additional analyses.
 
         Args:
             solver (str): Which solver to load the associated post-simulation data.
                 Should be `"cap"` (capacitance matrix) or `"eigs"` (Maxwell eigenmodes).
             json_filepath (str): Path to JSON file with post-simulation data written by
-                QTCAD’s wrapper.
+                the wrapper around QTCAD.
         """
 
         with open(json_filepath) as f:
