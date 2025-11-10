@@ -46,7 +46,7 @@ def sanitize_string(string: str) -> str:
 
 
 class QQTCADRenderer(QRendererAnalysis):
-    """Extends QRendererAnalysis class to use QTCAD’s API with Gmsh’s meshes.
+    """Extends QRendererAnalysis class to use QTCAD®’s API with Gmsh’s meshes.
     Based on QElmerRenderer.
 
     QQTCADRenderer default options:
@@ -81,7 +81,7 @@ class QQTCADRenderer(QRendererAnalysis):
                 tol_abs is useful when :math:`|C_{ij}|` is expected to be zero or
                 very small.
 
-        * capacitance_raw -- Dictionary of parameters to be passed directly to QTCAD's capacitance
+        * capacitance_raw -- Dictionary of parameters to be passed directly to QTCAD®'s capacitance
                              extractor solver via `qtcad.device.capacitance.SolverParams`.
                              Overwrites the parameters defined in `capacitance`: _any_ parameters
                              from `capacitance` are ignored (see note) and the defaults from
@@ -104,7 +104,7 @@ class QQTCADRenderer(QRendererAnalysis):
                                      results that agree within the tolerance thresholds.
                                      Default: 5.
 
-        * maxwell_emode_raw -- Dictionary of parameters to be passed directly to QTCAD's Maxwell
+        * maxwell_emode_raw -- Dictionary of parameters to be passed directly to QTCAD®'s Maxwell
                                eigenmode extractor solver via
                                `qtcad.device.maxwell_eigenmode.SolverParams`.
                                Overwrites the parameters defined in `maxwell_emode`: _any_
@@ -222,7 +222,7 @@ class QQTCADRenderer(QRendererAnalysis):
         return status
 
     def initialize_renderer(self):
-        """Initializes the Gmsh and QTCAD renderers.
+        """Initializes the Gmsh and QTCAD® renderers.
 
         NOTE TO THE USER: this should be used when using the QQTCADRenderer
         through design.renderers.qtcad instance.
@@ -242,7 +242,7 @@ class QQTCADRenderer(QRendererAnalysis):
         self._qtcad_ready = self.check_environment()
 
     def _initiate_renderer(self):
-        """Initializes the Gmsh renderer and check QTCAD requirements.
+        """Initializes the Gmsh renderer and check QTCAD® requirements.
 
         NOTE: This is automatically called when the USER specifically imports
         QQTCADRenderer in a Jupyter notebook and instantiates it.
@@ -261,7 +261,7 @@ class QQTCADRenderer(QRendererAnalysis):
         return self._close_renderer()
 
     def check_environment(self) -> bool:
-        """Check if QTCAD is able to fully run as a renderer."""
+        """Check if QTCAD® is able to fully run as a renderer."""
 
         return True
 
@@ -809,7 +809,7 @@ class QQTCADRenderer(QRendererAnalysis):
                                   " with the parameters allowed by"
                                   " `qtcad.device.maxwell_eigenmode.SolverParams` or left unset."
                                   " Please check the `options` parameters used to instantiate the"
-                                  " QTCAD renderer.")
+                                  " QTCAD® renderer.")
             self.logger.error(error_msg)
             raise error_msg
         if isinstance(self._options["capacitance_raw"], dict):
@@ -825,7 +825,7 @@ class QQTCADRenderer(QRendererAnalysis):
                                   " dictionary with the parameters allowed by"
                                   " `qtcad.device.maxwell_eigenmode.SolverParams` or left unset."
                                   " Please check the `options` parameters used to instantiate the"
-                                  " QTCAD renderer.")
+                                  " QTCAD® renderer.")
             self.logger.error(error_msg)
             raise error_msg
         if isinstance(self._options["maxwell_emode_raw"], dict):
@@ -837,7 +837,7 @@ class QQTCADRenderer(QRendererAnalysis):
             self.logger.warning(warning_msg)
 
     def export_parameters(self, json_filepath=None):
-        """Exports parameters that are required for QTCAD simulations as a JSON file."""
+        """Exports parameters that are required for QTCAD® simulations as a JSON file."""
 
         # Verify if the simulation parameters are valid.
         self._validate_options()
@@ -898,7 +898,7 @@ class QQTCADRenderer(QRendererAnalysis):
                 json_filepath (str): Path to the necessary parameters for the solver.
                   Defaults to the value used when exporting them using
                   `export_parameters`.
-                env_name (str): name of the conda environment where QTCAD is available.
+                env_name (str): name of the conda environment where QTCAD® is available.
                   Default: qtcad
 
         """
@@ -911,18 +911,18 @@ class QQTCADRenderer(QRendererAnalysis):
         if json_filepath is None:
             raise Exception(
                 "Unable to find the JSON file with the input parameters to run"
-                " QTCAD simulations."
+                " QTCAD® simulations."
                 " Please make sure to have exported them using"
                 " `export_parameters`."
                 )
         if not Path(json_filepath).exists():
             raise Exception(
                 "Unable to find the JSON file with the input parameters to run"
-                f" QTCAD simulations at ‘{json_filepath}’."
+                f" QTCAD® simulations at ‘{json_filepath}’."
                 " Please make sure to have exported them using"
                 " `export_parameters`."
                 " If a custom path was provided, make sure it points to a valid"
-                " QTCAD JSON file."
+                " QTCAD® JSON file."
                 )
 
         if (self.mesh_file is None) or (not Path(self.mesh_file).exists()):
@@ -934,8 +934,8 @@ class QQTCADRenderer(QRendererAnalysis):
         qtcad_env_found = self._check_conda_env(env_name)
         if not qtcad_env_found:
             raise Exception(
-                f"Unable to find QTCAD's conda environment ‘{env_name}’."
-                " If you have installed QTCAD in a custom environment, please provide its name"
+                f"Unable to find QTCAD®'s conda environment ‘{env_name}’."
+                " If you have installed QTCAD® in a custom environment, please provide its name"
                 " using the parameter `env_name`."
                 )
 
@@ -943,7 +943,7 @@ class QQTCADRenderer(QRendererAnalysis):
         conda_cmd = shutil.which("conda")
 
         self.logger.info("================")
-        self.logger.info("Running QTCAD...")
+        self.logger.info("Running QTCAD®...")
         self.logger.info("================")
         process = subprocess.Popen(
             [
@@ -970,9 +970,9 @@ class QQTCADRenderer(QRendererAnalysis):
         solver: str,
         json_filepath: str | Path,
     ) -> None:
-        """Load specific post-simulation data from QTCAD’s solvers.
+        """Load specific post-simulation data from QTCAD®’s solvers.
 
-        QTCAD’s capacitance and Maxwell eigenmode solvers register additional data
+        QTCAD®’s capacitance and Maxwell eigenmode solvers register additional data
         associated to electromagnetic field (eigenmode only) and refined mesh
         (capacitance and eigenmode) files after simulations are run. These data are
         useful for additional analyses.
@@ -981,14 +981,14 @@ class QQTCADRenderer(QRendererAnalysis):
             solver (str): Which solver to load the associated post-simulation data.
                 Should be `"cap"` (capacitance matrix) or `"eigs"` (Maxwell eigenmodes).
             json_filepath (str): Path to JSON file with post-simulation data written by
-                the wrapper around QTCAD.
+                the wrapper around QTCAD®.
         """
 
         with open(json_filepath) as f:
             json_data = json.load(f)
 
         validated = QtcadInputParams(**json_data)
-        error_msg_template = ("Unable to load post-simulation data from QTCAD’s"
+        error_msg_template = ("Unable to load post-simulation data from QTCAD®’s"
                               " {solver} solver.")
         if solver == "eigs":
             self.eig_refined_mesh_file = validated.eig_refined_mesh_file
@@ -1015,7 +1015,7 @@ class QQTCADRenderer(QRendererAnalysis):
         """Load capacitance matrix from file.
 
         Args:
-            filename (str, optional): Path to the pickle file containing QTCAD's capacitance
+            filename (str, optional): Path to the pickle file containing QTCAD®'s capacitance
             matrix (a dictionary; units: femtofarads). Defaults to `None`, loading the
             default path to the file written by the capacitance extractor.
 
@@ -1029,7 +1029,7 @@ class QQTCADRenderer(QRendererAnalysis):
         input_file = Path(filepath)
         if not input_file.exists():
             raise Exception(
-                f"Unable to load the capacitance matrix generated by QTCAD from ‘{filepath}’."
+                f"Unable to load the capacitance matrix generated by QTCAD® from ‘{filepath}’."
                 " Please make sure the path to the file is correct and the capacitance"
                 " extraction method has ran successfully.",
                 )
@@ -1058,7 +1058,7 @@ class QQTCADRenderer(QRendererAnalysis):
         """Load Maxwell eigenmodes from file.
 
         Args:
-            filename (str, optional): Path to the pickle file containing QTCAD's Maxwell
+            filename (str, optional): Path to the pickle file containing QTCAD®'s Maxwell
             eigenmode calculation result (units: gigahertz). Defaults to `None`, loading the
             default path to the file written by the Maxwell eigenmode extractor.
 
@@ -1072,7 +1072,7 @@ class QQTCADRenderer(QRendererAnalysis):
         input_file = Path(filepath)
         if not input_file.exists():
             raise Exception(
-                f"Unable to load Maxwell eigenmodes generated by QTCAD from ‘{filepath}’."
+                f"Unable to load Maxwell eigenmodes generated by QTCAD® from ‘{filepath}’."
                 " Please make sure the path to the file is correct and the eigenmode"
                 " extraction method has ran successfully."
                 )
@@ -1110,7 +1110,7 @@ class QQTCADRenderer(QRendererAnalysis):
                 Defaults to `True`.
             save (bool, optional): Whether to save the plot of the electric fields as a
                 PNG file. Defaults to `True`.
-            vtu_file (str | Path | None): Path to a VTU file containing QTCAD’s
+            vtu_file (str | Path | None): Path to a VTU file containing QTCAD®’s
                 electromagnetic fields. If `None`, will automatically consider the VTU
                 file generated by the current `QQTCADRenderer` set up. Must be passed
                 only if loading results from a different simulation set up.
@@ -1236,7 +1236,7 @@ class QQTCADRenderer(QRendererAnalysis):
                 Defaults to `True`.
             save (bool, optional): Whether to save the plot of the electric field as a
                 PNG file. Defaults to `True`.
-            vtu_file (str | Path | None): Path to a VTU file containing QTCAD’s
+            vtu_file (str | Path | None): Path to a VTU file containing QTCAD®’s
                 electromagnetic fields. If `None`, will automatically consider the VTU
                 file generated by the current `QQTCADRenderer` set up. Must be passed
                 only if loading results from a different simulation set up.

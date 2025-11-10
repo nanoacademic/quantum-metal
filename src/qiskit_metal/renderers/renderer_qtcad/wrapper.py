@@ -87,7 +87,7 @@ class QQTCADWrapper():
             json.dump(self.json_data, f, indent=2)
 
     def setup(self, bnd_conditions) -> None:
-        """Set up QTCAD.
+        """Set up QTCAD®.
 
         Args:
             bnd_conditions : Boundary conditions assigned on conductors.
@@ -192,7 +192,7 @@ class QQTCADWrapper():
         if len(self.signal_conductors.keys()) == 0:
             logger.warning(
                 "WARNING: No conductors were assigned to a signal conductor."
-                " QTCAD will not be able to extract the capacitance matrix for"
+                " QTCAD® will not be able to extract the capacitance matrix for"
                 " this design.")
 
         # Qiskit Metal assumes the presence of the ground(_plane) conductor in
@@ -228,7 +228,7 @@ class QQTCADWrapper():
         # self.device.new_infinity_bnd("vacuum_box_sfs")
 
     def solve_eigs(self):
-        """Solve for Maxwell eigenmodes using QTCAD.
+        """Solve for Maxwell eigenmodes using QTCAD®.
 
         Returns:
             The frequencies are stored in `device.maxwell_freqs`. The fields are
@@ -361,7 +361,7 @@ class QQTCADWrapper():
                          " Try calling `solve_eigs` before.")
 
     def solve_cap(self):
-        """Compute the capacitance matrix using QTCAD.
+        """Compute the capacitance matrix using QTCAD®.
 
         It is stored in the attribute `capacitance_matrix`, being a
         dict[tuple[str,str], float].
@@ -388,7 +388,7 @@ class QQTCADWrapper():
 
         self.solver_params_cap = solver_params_cap
 
-        logger.info("Running QTCAD capacitance extraction.")
+        logger.info("Running QTCAD® capacitance extraction.")
         self.capacitance_matrix = self.compute_capacitance_matrix()
 
     def save_capacitance_matrix(self, path: str) -> None:

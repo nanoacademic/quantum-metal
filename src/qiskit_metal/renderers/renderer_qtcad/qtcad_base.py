@@ -21,10 +21,10 @@ class QtcadConstants:
     """Capacitance scale/units in Qiskit Metal"""
 
     QTCAD_CAP_OUTPUT_FILENAME = "qtcad_output_cap.pickle"
-    """Default file name for QTCAD’s wrapper capacitance pickle file."""
+    """Default file name for the pickle file with capacitance results."""
 
     QTCAD_EIG_OUTPUT_FILENAME = "qtcad_output_eigs.pickle"
-    """Default file name for QTCAD’s wrapper eigenmode pickle file."""
+    """Default file name for the pickle file with Maxwell eigenmode results."""
 
     EIGENMODE_LAYER_TEMPLATE = "abs(electric field) [V/m] - mode {n}"
-    """Template string for QTCAD’s eigenmode scalar layers in VTU files."""
+    """Template string for QTCAD®’s Maxwell eigenmode scalar layers in VTU files."""
