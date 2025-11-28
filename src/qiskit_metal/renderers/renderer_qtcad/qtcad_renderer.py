@@ -180,6 +180,7 @@ class QQTCADRenderer(QRendererAnalysis):
 
         super().__init__(design=design, initiate=initiate, options=options)
 
+        self.geo_file = self._options["geo_filepath"]
         self.mesh_file = None
         self.json_filepath = None
         self.cap_refined_mesh_file = None
@@ -769,39 +770,60 @@ class QQTCADRenderer(QRendererAnalysis):
         """Launch Gmsh GUI for viewing the model."""
         self.gmsh.launch_gui()
 
+    def export_geometry(
+        self,
+        geometry_file: Optional[str] = None,
+    ) -> str:
+        """Export the design to a geometry file using Gmsh.
+
+        Args:
+            geometry_file (Optional[str], optional): File path to which to save
+              the geometry file. If `None`, uses the value of the `geo_filepath`
+            entry in QQTCADRenderer’s options dictionary. Default: `None`.
+
+        Returns:
+            str: File path to the exported geometry file.
+        """
+
+        if geometry_file is None:
+            if self._options["geo_filepath"] is not None:
+                self.geo_file = self._options["geo_filepath"]
+        else:
+            self.geo_file = geometry_file
+
+        # Guarantee the path to the mesh file exists.
+        Path(self.geo_file).parent.resolve().mkdir(exist_ok=True, parents=True)
+        self.gmsh.export_geometry(self.geo_file)
+
+        return self.geo_file
+
     def export_mesh(
         self,
         mesh_file: Optional[str] = None,
-        geometry_file: Optional[str] = None,
-    ):
-        """Export the mesh and geometry files.
+    ) -> str:
+        """Export the mesh.
 
         The mesh is exported with unit scaling factor.
 
         Args:
             mesh_file (Optional[str], optional): File path to which to save the
-              mesh file.
-            geometry_file (Optional[str], optional): File path to which to save
-              the geometry file.
+              mesh file. If `None`, uses the value of the `mesh_filepath`
+              entry in QQTCADRenderer’s options dictionary. Default: `None`.
+
+        Returns:
+            str: File path to the exported mesh file.
         """
 
-        if geometry_file is None:
-            geometry_file = self._options["geo_filepath"]
-
-        # We check against `None` once again because
-        # `self._options["geo_filepath"]` is `None` if AMR is not enabled.
-        if geometry_file is not None:
-            Path(geometry_file).parent.resolve().mkdir(exist_ok=True, parents=True)
-            self.gmsh.export_geometry(geometry_file)
-
         if mesh_file is None:
-            mesh_file = self._options["mesh_filepath"]
-
-        self.mesh_file = mesh_file
+            self.mesh_file = self._options["mesh_filepath"]
+        else:
+            self.mesh_file = mesh_file
 
         # Guarantee the path to the mesh file exists.
         Path(self.mesh_file).parent.resolve().mkdir(exist_ok=True, parents=True)
         self.gmsh.export_mesh(self.mesh_file, scaling_factor=1)
+
+        return self.mesh_file
 
     def _validate_options(self):
         if not isinstance(self._options["capacitance_raw"], (type(None), dict)):
@@ -928,8 +950,15 @@ class QQTCADRenderer(QRendererAnalysis):
         if (self.mesh_file is None) or (not Path(self.mesh_file).exists()):
             raise Exception(
                 "Unable to find the mesh file."
-                " Please make sure to have generated it using `export_mesh`."
-                )
+                " Please make sure to have generated it using `export_mesh`.")
+
+        geo_file = self._options["geo_filepath"]
+        adaptive = self._options["adaptive"]
+        if (geo_file
+                is not None) and (not Path(geo_file).exists()) and adaptive:
+            raise Exception(
+                "Unable to find the mesh file."
+                " Please make sure to have generated it using `export_design`.")
 
         qtcad_env_found = self._check_conda_env(env_name)
         if not qtcad_env_found:
