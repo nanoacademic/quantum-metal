@@ -800,8 +800,8 @@ class QQTCADRenderer(QRendererAnalysis):
     def export_mesh(
         self,
         mesh_file: Optional[str] = None,
-    ) -> str:
-        """Export the mesh.
+    ) -> tuple[str, str | None]:
+        """Export the mesh and, if AMR is enable, the geometry file..
 
         The mesh is exported with unit scaling factor.
 
@@ -811,8 +811,14 @@ class QQTCADRenderer(QRendererAnalysis):
               entry in QQTCADRenderer’s options dictionary. Default: `None`.
 
         Returns:
-            str: File path to the exported mesh file.
+            tuple[str, str | None]: If AMR is enabled, 2-tuple with the file
+              path to the exported mesh and geometry files. Otherwise, the
+              second element, associated to the geometry file is `None`.
         """
+
+        geo_file = None
+        if self._options["adaptive"]:
+            geo_file = self.export_geometry()
 
         if mesh_file is None:
             self.mesh_file = self._options["mesh_filepath"]
@@ -823,7 +829,7 @@ class QQTCADRenderer(QRendererAnalysis):
         Path(self.mesh_file).parent.resolve().mkdir(exist_ok=True, parents=True)
         self.gmsh.export_mesh(self.mesh_file, scaling_factor=1)
 
-        return self.mesh_file
+        return self.mesh_file, geo_file
 
     def _validate_options(self):
         if not isinstance(self._options["capacitance_raw"], (type(None), dict)):
