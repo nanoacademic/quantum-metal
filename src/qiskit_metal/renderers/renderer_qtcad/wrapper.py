@@ -68,8 +68,9 @@ class QQTCADWrapper():
 
         # Check if the keys to be updated are a valid subset of the possible fields.
         if not solver_data.keys() <= self.json_data.keys():
-            error_msg = ValueError("Invalid (superfluous) data found when trying to"
-                                   " update JSON data.")
+            error_msg = ValueError(
+                "Invalid (superfluous) data found when trying to update JSON data."
+            )
             logger.error(error_msg)
             raise error_msg
 
@@ -187,7 +188,8 @@ class QQTCADWrapper():
             if conductor == "gnd":
                 ground_conductor += signal_conductor_surfaces
             else:
-                self.signal_conductors[geom_names[-1]] = signal_conductor_surfaces
+                self.signal_conductors[
+                    geom_names[-1]] = signal_conductor_surfaces
 
         if len(self.signal_conductors.keys()) == 0:
             logger.warning(
@@ -263,8 +265,9 @@ class QQTCADWrapper():
         # Parse parameters.
         self.solver_params_eig = solver_params_eig
         qtcad_solver_eigs = QtcadSolverEig(
-            self.device, self.solver_params_eig, geo_file=self._options["geo_filepath"]
-        )
+            self.device,
+            self.solver_params_eig,
+            geo_file=self._options["geo_filepath"])
         self.solver_eig = qtcad_solver_eigs
 
         # Solve.
@@ -376,7 +379,8 @@ class QQTCADWrapper():
             # Reduced set of parameters.
             solver_params_cap.tol_rel = options_cap["tol_rel"]
             solver_params_cap.tol_abs = options_cap["tol_abs"]
-            solver_params_cap.min_converged_iters = options_cap["min_converged_iters"]
+            solver_params_cap.min_converged_iters = options_cap[
+                "min_converged_iters"]
         else:
             # Pass parameters directly to `qtcad.device.capacitance.SolverParams`.
             solver_params_cap = QtcadSolverCapParams(options_cap_raw)
@@ -405,9 +409,13 @@ class QQTCADWrapper():
         sig_conductor_length = len(sig_conductor_names)
 
         # Create ordered capacitance matrix.
-        cap_list = [cap[(i, j)] for i in sig_conductor_names for j in sig_conductor_names]
-        cap_matrix_array = np.reshape(cap_list,
-                                      (sig_conductor_length, sig_conductor_length))
+        cap_list = [
+            cap[(i, j)]
+            for i in sig_conductor_names
+            for j in sig_conductor_names
+        ]
+        cap_matrix_array = np.reshape(
+            cap_list, (sig_conductor_length, sig_conductor_length))
         return cap_matrix_array
 
     def compute_capacitance_matrix(self) -> dict[tuple[str, str], float]:
@@ -417,10 +425,10 @@ class QQTCADWrapper():
              dict: Capacitance matrix in femtofarads between the conductors.
         """
 
-        qtcad_solver = QtcadSolverCap(
-            self.device, self.signal_conductors, self.solver_params_cap, geo_file = self._options[
-                "geo_filepath"]
-        )
+        qtcad_solver = QtcadSolverCap(self.device,
+                                      self.signal_conductors,
+                                      self.solver_params_cap,
+                                      geo_file=self._options["geo_filepath"])
 
         # dict[tuple[str,str], float]
         cap_out = qtcad_solver.solve()
@@ -480,7 +488,8 @@ def main_solve_eigs(json_file):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python wrapper.py quantity-to-solve-for path-to-json-file")
+        print(
+            "Usage: python wrapper.py quantity-to-solve-for path-to-json-file")
         sys.exit(1)
 
     solve_for = sys.argv[1]
