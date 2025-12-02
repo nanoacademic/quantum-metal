@@ -801,7 +801,7 @@ class QQTCADRenderer(QRendererAnalysis):
         self,
         mesh_file: Optional[str] = None,
     ) -> tuple[str, str | None]:
-        """Export the mesh and, if AMR is enable, the geometry file..
+        """Export the mesh and, if AMR is enabled, the geometry file.
 
         The mesh is exported with unit scaling factor.
 
@@ -963,8 +963,9 @@ class QQTCADRenderer(QRendererAnalysis):
         if (geo_file
                 is not None) and (not Path(geo_file).exists()) and adaptive:
             raise Exception(
-                "Unable to find the mesh file."
-                " Please make sure to have generated it using `export_design`.")
+                "Unable to find the geometry file."
+                " Please make sure to have generated it using `export_geometry` or"
+                " `export_mesh`.")
 
         qtcad_env_found = self._check_conda_env(env_name)
         if not qtcad_env_found:
@@ -977,9 +978,9 @@ class QQTCADRenderer(QRendererAnalysis):
         # Launch a subprocess with unbuffered Python (-u).
         conda_cmd = shutil.which("conda")
 
-        self.logger.info("================")
+        self.logger.info("=================")
         self.logger.info("Running QTCAD®...")
-        self.logger.info("================")
+        self.logger.info("=================")
         process = subprocess.Popen(
             [
                 conda_cmd, "run", "--no-capture-output", "-n", env_name, "python", "-u",
