@@ -898,29 +898,47 @@ class QGmshRenderer(QRenderer):
                 [object_dimtag], all_geom_dimtags
             )
 
-        updated_geoms = fragmented_geoms[0]
-        insert_idx = updated_geoms.index(object_dimtag)
-        all_geom_dimtags.insert(insert_idx, object_dimtag)
+        # Use outDimTagsMap (fragmented_geoms[1]) to robustly map input OCC
+        # parent entities to their output children/fragments.
+        out_dim_tags_map = fragmented_geoms[1]
+        input_entities = [object_dimtag] + all_geom_dimtags
+
+        # Map each input parent tag to its list of resulting fragmented
+        # children tags.
+        tag_mapping = {}
+        for parent, children in zip(input_entities, out_dim_tags_map):
+            parent_tag = parent[1]
+            child_tags = [child[1] for child in children]
+            tag_mapping[parent_tag] = child_tags
+
         all_dicts = {
             0: self.paths_dict,
             1: self.polys_dict,
             2: self.juncs_dict,
             3: self.layers_dict,
         }
-        for old, new in zip(all_geom_dimtags, updated_geoms):
-            if old != new:
-                for i, d in all_dicts.items():
-                    for l, geoms in d.items():
-                        if isinstance(geoms, dict):
-                            for name, geom_id in geoms.items():
-                                if len(geom_id) > 0 and geom_id[0] == old[1]:
-                                    all_dicts[i][l][name].append(new[1])
-                                    all_dicts[i][l][name].remove(old[1])
-                        elif isinstance(geoms, list):
-                            for geom_id in geoms:
-                                if geom_id == old[1]:
-                                    all_dicts[i][l].append(new[1])
-                                    all_dicts[i][l].remove(old[1])
+
+        # Safely replace old tags with their new fragmented tags across all
+        # renderer dicts.
+        for i, d in all_dicts.items():
+            for l, geoms in d.items():
+                if isinstance(geoms, dict):
+                    for name, geom_ids in geoms.items():
+                        new_ids = []
+                        for gid in geom_ids:
+                            if gid in tag_mapping:
+                                new_ids.extend(tag_mapping[gid])
+                            else:
+                                new_ids.append(gid)
+                        all_dicts[i][l][name] = new_ids
+                elif isinstance(geoms, list):
+                    new_ids = []
+                    for gid in geoms:
+                        if gid in tag_mapping:
+                            new_ids.extend(tag_mapping[gid])
+                        else:
+                            new_ids.append(gid)
+                    all_dicts[i][l] = new_ids
 
         # TODO: Do we require 3D junctions? Active issue: #842
         # all_juncs = []
@@ -1393,7 +1411,8 @@ class QGmshRenderer(QRenderer):
                 "which are not needed when exporting to XAO files for use in "
                 "renderers that support adaptive meshing refinement (AMR). If you "
                 "are going to use AMR, consider disabling the use of mesh size "
-                "fields.")
+                "fields."
+            )
 
         gmsh.write(filepath)
 
