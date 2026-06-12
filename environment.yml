@@ -19,6 +19,7 @@ dependencies:
   - shapely>=2.0.1 # Synced with pyproject.toml floor.
   - jupyter
   - cython<3.0.0
+  - pyvista~=0.46
   - pip
   - pip:
       - pyaedt>=0.21,<0.24 # Synced with pyproject.toml ceiling (pyaedt 0.24 has bugs).
