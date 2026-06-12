@@ -101,7 +101,7 @@
 
 # Accounting for old package name
 [tool.uv.build-backend]
-    module-name = "qiskit_metal"
+    module-name = ["qiskit_metal", "quantum_metal"]
 
 [dependency-groups]
     jupyter = [
