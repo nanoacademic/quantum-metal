@@ -1200,9 +1200,15 @@ class QQTCADRenderer(QRendererAnalysis):
         reader.disable_all_cell_arrays()
         # Enable the eigenmode-specific arrays and ingest the file.
         # TODO: Verify if the VTU file has all the layers.
+        scalar_layers = []
         for mdx in range(num_modes):
-            reader.enable_point_array(
-                QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx))
+            scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx)
+            if scalar_layer not in reader.point_array_names:
+                fallback_layer = "abs(electric field) [V/m]"
+                if fallback_layer in reader.point_array_names:
+                    scalar_layer = fallback_layer
+            reader.enable_point_array(scalar_layer)
+            scalar_layers.append(scalar_layer)
         mesh = reader.read()
 
         # Maximum number of axes along the horizontal direction.
@@ -1223,8 +1229,7 @@ class QQTCADRenderer(QRendererAnalysis):
         for vdx in range(num_axes_v):
             for hdx in range(len(modes_wrapped[vdx])):
                 mdx = modes_wrapped[vdx][hdx]
-                scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(
-                    n=mdx)
+                scalar_layer = scalar_layers[mdx]
                 title = f"Eigenmode {mdx+1}"
 
                 # Create slice at z=0.
@@ -1318,6 +1323,10 @@ class QQTCADRenderer(QRendererAnalysis):
         # Enable the specific eigenmode array and ingest the file.
         mdx = n - 1
         scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx)
+        if scalar_layer not in reader.point_array_names:
+            fallback_layer = "abs(electric field) [V/m]"
+            if fallback_layer in reader.point_array_names:
+                scalar_layer = fallback_layer
         reader.enable_point_array(scalar_layer)
         mesh = reader.read()
 
