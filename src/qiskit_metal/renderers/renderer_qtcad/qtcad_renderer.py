@@ -24,6 +24,7 @@ import pyvista as pv
 import shapely
 
 from .qtcad_base import QtcadInputParams, QtcadConstants
+from .qtcad_standalone_template import get_standalone_script
 from qiskit_metal import Dict, draw
 from qiskit_metal.toolbox_metal.parsing import parse_entry
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
@@ -43,6 +44,60 @@ def sanitize_string(string: str) -> str:
     filename = re.sub(r'[^\w\s\-_.]', '', string)
     filename = filename.replace(' ', '_')
     return filename
+
+
+class hybrid_staticmethod(staticmethod):
+    """A `staticmethod` subclass that binds the instance when called from an instance.
+
+    This simply allows the users to skip passing a `QQTCADRenderer` instance to
+    `export_script`.
+    """
+
+    def __get__(self, instance, owner):
+        """Access the method and automatically inject the instance’s JSON file path.
+
+        This method:
+
+        1. When called directly on the class (``QQTCADRenderer.export_script``), behaves
+           like a normal `staticmethod`. It expects a JSON file path to be passed
+           explicitly.
+
+        2. When called on an instance (``qtcad_renderer.export_script``), it returns a
+           wrapper that automatically retrieves the instance’s ``json_filepath`` and
+           passes it as the second argument (the JSON path). The user does not need to
+           provide it manually.
+
+        Args:
+            instance: The QTCAD renderer instance if accessed on an object, otherwise
+                ``None``.
+            owner: The class on which the descriptor is accessed.
+
+        Returns:
+            callable: A wrapper function (access via instance) or the original
+                `staticmethod` callable (access via class).
+
+        Raises:
+            ValueError: If accessed on an instance that does not have ``json_filepath``
+                defined yet (usually before `export_parameters` is called).
+        """
+        if instance is None:
+            return staticmethod.__get__(self, instance, owner)
+        else:
+
+            def wrapper(solve_for, script_filepath=None):
+                if (
+                    not hasattr(instance, "json_filepath")
+                    or instance.json_filepath is None
+                ):
+                    raise ValueError(
+                        "The renderer instance does not have `json_filepath` set. "
+                        "Please run `export_parameters` first."
+                    )
+                return staticmethod.__get__(self, instance, owner)(
+                    solve_for, instance.json_filepath, script_filepath
+                )
+
+            return wrapper
 
 
 class QQTCADRenderer(QRendererAnalysis):
@@ -908,6 +963,182 @@ class QQTCADRenderer(QRendererAnalysis):
         Path(json_filepath).parent.resolve().mkdir(exist_ok=True, parents=True)
         with open(json_filepath, "w") as f:
             json.dump(data, f, indent=2)
+
+    @hybrid_staticmethod
+    def export_script(
+        solve_for: str,
+        json_filepath: Union[str, Path],
+        script_filepath: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Set up a standalone Python QTCAD script for a given type of simulation.
+
+        This converts the JSON file output by QQTCADRenderer into a plain script to run
+        a QTCAD simulation from the design produced by Quantum Metal. The output script
+        considers the layout and mesh files already produced by Quantum Metal.
+
+        Parts of this method were taken from QQTCADRenderer’s `wrapper.py`.
+
+        Args:
+            solve_for: Solve for `"cap"` (capacitance matrix) or `"eigs"` (Maxwell
+                eigenmodes).
+            json_filepath: Path to the JSON file containing simulation parameters.
+            script_filepath: Optional path to where the generated Python script will be
+                saved. Defaults to the basename of the mesh file + "_qtcad_only.py"
+                inside ``output_dir``.
+
+        Returns:
+            Path: The path to the generated script.
+        """
+        if solve_for not in ["cap", "eigs"]:
+            raise ValueError("`solve_for` must be either 'cap' or 'eigs'.")
+
+        json_filepath = Path(json_filepath)
+
+        if not json_filepath.exists():
+            raise FileNotFoundError(
+                f"The JSON QTCAD parameters file '{json_filepath}' was not found."
+                " Please make sure to run `export_parameters()` first and ensure that"
+                " it has completed successfully."
+            )
+
+        with open(json_filepath, "r") as f:
+            data = json.load(f)
+
+        gmsh_physical_groups = data["gmsh_physical_groups"]
+        _conductors = data["_conductors"]
+        _inductive_ports = data["_inductive_ports"]
+        sample_holder = data["sample_holder"]
+        qtcad_options = data["qtcad_options"]
+
+        mesh_filepath = qtcad_options["mesh_filepath"]
+        mesh_scale = qtcad_options["mesh_scale"]
+        geo_filepath = qtcad_options.get("geo_filepath", None)
+        output_dir = qtcad_options["output_dir"]
+        make_subdir = qtcad_options["make_subdir"]
+        capacitance = qtcad_options["capacitance"]
+        capacitance_raw = qtcad_options["capacitance_raw"]
+        maxwell_emode = qtcad_options["maxwell_emode"]
+        maxwell_emode_raw = qtcad_options["maxwell_emode_raw"]
+
+        # Get default parameters dynamically from `default_options`.
+        default_cap = QQTCADRenderer.default_options.get("capacitance")
+        default_eig = QQTCADRenderer.default_options.get("maxwell_emode")
+
+        # Retrieve capacitance options, fallback to `default_options`.
+        cap_tol_rel = capacitance.get("tol_rel", default_cap.get("tol_rel"))
+        cap_tol_abs = capacitance.get("tol_abs", default_cap.get("tol_abs"))
+        cap_min_iters = capacitance.get(
+            "min_converged_iters", default_cap.get("min_converged_iters")
+        )
+
+        # Retrieve Maxwell eigenmode options, fallback to `default_options`.
+        eig_num_modes = maxwell_emode.get(
+            "num_modes", default_eig.get("num_modes")
+        )
+        eig_tol_rel = maxwell_emode.get("tol_rel", default_eig.get("tol_rel"))
+        eig_min_iters = maxwell_emode.get(
+            "min_converged_iters", default_eig.get("min_converged_iters")
+        )
+
+        # 1. Set up dielectric regions.
+        dielectric_regions = []
+        if sample_holder:
+            dielectric_regions.append(
+                'device.new_region("vacuum_box", qtcad_materials.vacuum)'
+            )
+        for layer, ph_geoms in gmsh_physical_groups.items():
+            if layer in ["global", "chips"]:
+                continue
+            for k in ph_geoms.keys():
+                if "dielectric" in k and "_sfs" not in k:
+                    dielectric_regions.append(
+                        f'device.new_region("{k}", qtcad_materials.Si)'
+                    )
+        dielectric_regions_code = "\n".join(dielectric_regions)
+
+        # 2. Set up signal conductors.
+        signal_conductors = dict()
+        ground_conductor = []
+        conductors = []
+
+        for layer, ph_geoms in gmsh_physical_groups.items():
+            if layer in ["global", "chips"]:
+                continue
+            for name in ph_geoms:
+                if "dielectric" in name:
+                    continue
+                if ("ground_plane" in name) and ("sfs" in name):
+                    ground_conductor.append(name)
+
+        for conductor_name, geom_names in _conductors.items():
+            signal_conductor_surfaces = [f"{name}_sfs" for name in geom_names]
+            if conductor_name == "gnd":
+                ground_conductor += signal_conductor_surfaces
+            else:
+                signal_conductors[geom_names[-1]] = signal_conductor_surfaces
+
+        signal_conductors["ground_plane"] = ground_conductor
+
+        for cond in signal_conductors.values():
+            conductors += cond
+
+        # 3. Set up inductive ports.
+        inductive_ports_code_lines = []
+        for qubit_name, junction_params in _inductive_ports.items():
+            if junction_params.get("bnd_spec") is None:
+                continue
+            inductive_ports_code_lines.append(
+                f"device.new_inductor(\n"
+                f"    bnd_spec={repr(junction_params['bnd_spec'])},\n"
+                f"    inductance={repr(junction_params['inductance'])},\n"
+                f"    length={repr(junction_params.get('length'))},\n"
+                f"    width={repr(junction_params.get('width'))},\n"
+                f"    dir={repr(junction_params.get('dir'))}\n"
+                f")"
+            )
+        if inductive_ports_code_lines:
+            inductive_ports_code = "\n".join(inductive_ports_code_lines)
+        else:
+            inductive_ports_code = "pass"
+
+        # 4. Generate script.
+        script_content = get_standalone_script(
+            solve_for=solve_for,
+            mesh_filepath=mesh_filepath,
+            mesh_scale=mesh_scale,
+            dielectric_regions_code=dielectric_regions_code,
+            signal_conductors=signal_conductors,
+            conductors=conductors,
+            inductive_ports_code=inductive_ports_code,
+            capacitance_raw=capacitance_raw,
+            cap_tol_rel=cap_tol_rel,
+            cap_tol_abs=cap_tol_abs,
+            cap_min_iters=cap_min_iters,
+            output_dir=output_dir,
+            make_subdir=make_subdir,
+            geo_filepath=geo_filepath,
+            maxwell_emode_raw=maxwell_emode_raw,
+            eig_num_modes=eig_num_modes,
+            eig_tol_rel=eig_tol_rel,
+            eig_min_iters=eig_min_iters,
+        )
+
+        if script_filepath is None:
+            mesh_stem = Path(mesh_filepath).stem
+            script_filepath = json_filepath.parent / f"{mesh_stem}_qtcad_only.py"
+        else:
+            script_filepath = Path(script_filepath)
+
+        script_filepath.parent.resolve().mkdir(exist_ok=True, parents=True)
+        with open(script_filepath, "w") as f:
+            f.write(script_content)
+
+        print(
+            f"Standalone QTCAD script saved to ‘{script_filepath}’."
+            " To run it, activate QTCAD’s Conda or Pixi environment."
+        )
+
+        return script_filepath
 
     def _check_conda_env(self, env_name) -> bool:
         """Check the existence of a conda environment.

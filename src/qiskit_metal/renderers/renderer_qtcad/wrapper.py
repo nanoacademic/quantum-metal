@@ -1,3 +1,9 @@
+"""Wrapper to run QTCAD simulations from JSON files generated using Quantum Metal.
+
+Changes to this file should be followed by appropriate changes to QQTCADRenderer’s
+`export_script`.
+"""
+
 import json
 from pathlib import Path
 from typing import Optional
