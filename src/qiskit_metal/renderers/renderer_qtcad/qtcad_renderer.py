@@ -27,6 +27,7 @@ from .qtcad_base import QtcadInputParams, QtcadConstants
 from .qtcad_standalone_template import get_standalone_script
 from qiskit_metal import Dict, draw
 from qiskit_metal.toolbox_metal.parsing import parse_entry
+from qiskit_metal.toolbox_python.utility_functions import clean_name
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
 from qiskit_metal.renderers.renderer_gmsh.gmsh_renderer import QGmshRenderer
 from qiskit_metal.designs import MultiPlanar
@@ -479,7 +480,7 @@ class QQTCADRenderer(QRendererAnalysis):
             for i in self.qcomp_geom_table["component"]
         ]
         phys_grps = [
-            s1 + "_" + s2 for s1, s2 in zip(qcomp_names_for_qgeom, qgeom_names)
+            s1 + "_" + clean_name(s2) for s1, s2 in zip(qcomp_names_for_qgeom, qgeom_names)
         ]
         qgeom_idxs = list(range(len(self.qcomp_geom_table)))
         id_net_dict = {k: -1 for k in phys_grps}

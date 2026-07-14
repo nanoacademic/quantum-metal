@@ -177,6 +177,18 @@ class QQTCADWrapper():
         self.conductors = []
         self.inductive_ports = []
 
+        # Determine if ground plane is 3D (signature: `*_sfs`).
+        gp_sfs_exists = False
+        for layer, ph_geoms in self.gmsh_physical_groups.items():
+            if layer in ["global", "chips"]:
+                continue
+            for name in ph_geoms:
+                if "ground_plane" in name and name.endswith("_sfs"):
+                    gp_sfs_exists = True
+                    break
+            if gp_sfs_exists:
+                break
+
         for layer, ph_geoms in self.gmsh_physical_groups.items():
             # ph_geoms: set of (label, Gmsh physical group ID)
             if layer in ["global", "chips"]:
@@ -185,11 +197,27 @@ class QQTCADWrapper():
             for name in ph_geoms:
                 if "dielectric" in name:
                     continue
-                if ("ground_plane" in name) and ("sfs" in name):
-                    ground_conductor.append(name)
+                if "ground_plane" in name:
+                    if gp_sfs_exists:
+                        if name.endswith("_sfs"):
+                            ground_conductor.append(name)
+                    else:
+                        ground_conductor.append(name)
 
         for conductor, geom_names in self._conductors.items():
-            signal_conductor_surfaces = [f"{name}_sfs" for name in geom_names]
+            signal_conductor_surfaces = []
+            for name in geom_names:
+                # Check if the 3D signature `*_sfs` exists in the
+                # physical groups of any layer.
+                sfs_exists = False
+                for layer, ph_geoms in self.gmsh_physical_groups.items():
+                    if f"{name}_sfs" in ph_geoms:
+                        sfs_exists = True
+                        break
+                if sfs_exists:
+                    signal_conductor_surfaces.append(f"{name}_sfs")
+                else:
+                    signal_conductor_surfaces.append(f"{name}")
 
             if conductor == "gnd":
                 ground_conductor += signal_conductor_surfaces

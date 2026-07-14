@@ -757,10 +757,25 @@ class QGmshRenderer(QRenderer):
             self.render_layer(layer)
 
         if draw_sample_holder:
+            # Check if variables are explicitly defined in the design.
             if "sample_holder_top" in self.design.variables.keys():
                 p = self.design.variables
-            else:
+            # Retrieve them from the first chip’s size (standard for `DesignPlanar`).
+            # Note: We check if the keys are actually present because `addict.Dict`
+            # returns an empty `Dict` instead of a `KeyError` on missing keys.
+            elif (
+                hasattr(self.design, "get_chip_size")
+                and len(self.design.chips) > 0
+                and "sample_holder_top"
+                in self.design.get_chip_size(list(self.design.chips.keys())[0])
+            ):
+                p = self.design.get_chip_size(list(self.design.chips.keys())[0])
+            # If available, fall back to the multiplanar package configuration.
+            elif hasattr(self.design, "_uwave_package"):
                 p = self.design._uwave_package
+            # Otherwise, fallback to avoid a crash.
+            else:
+                p = {"sample_holder_top": "8mm", "sample_holder_bottom": "8mm"}
 
             vac_height = self.parse_units_gmsh(
                 [p["sample_holder_top"], p["sample_holder_bottom"]]
