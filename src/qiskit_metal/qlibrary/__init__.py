@@ -81,6 +81,7 @@ Resonator
     :toctree: .
 
     ReadoutResFC
+    GeneralizedReadoutResFC
     ResonatorLumped
 
 
