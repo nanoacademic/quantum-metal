@@ -177,6 +177,20 @@ class QQTCADWrapper():
         self.conductors = []
         self.inductive_ports = []
 
+        # Determine if the ground plane is a 3D object (signature of the surfaces of 3D
+        # objects from QGmshRenderer: `*_sfs`).
+        gp_is_3d = False
+        for layer, ph_geoms in self.gmsh_physical_groups.items():
+            if layer in ["global", "chips"]:
+                continue
+            for name in ph_geoms:
+                if "ground_plane" in name and name.endswith("_sfs"):
+                    gp_is_3d = True
+                    break
+            if gp_is_3d:
+                break
+
+        # Populate the ground-conductor list with physical groups.
         for layer, ph_geoms in self.gmsh_physical_groups.items():
             # ph_geoms: set of (label, Gmsh physical group ID)
             if layer in ["global", "chips"]:
@@ -185,11 +199,31 @@ class QQTCADWrapper():
             for name in ph_geoms:
                 if "dielectric" in name:
                     continue
-                if ("ground_plane" in name) and ("sfs" in name):
-                    ground_conductor.append(name)
+                if "ground_plane" in name:
+                    # Name matching based on the QGmshRenderer convention.
+                    if gp_is_3d:
+                        if name.endswith("_sfs"):
+                            ground_conductor.append(name)
+                    else:
+                        ground_conductor.append(name)
 
+        # Populate the signal-conductor list with physical groups.
         for conductor, geom_names in self._conductors.items():
-            signal_conductor_surfaces = [f"{name}_sfs" for name in geom_names]
+            signal_conductor_surfaces = []
+            for name in geom_names:
+                # Check if the 3D signature `*_sfs` exists in the
+                # physical groups of any layer.
+                sc_is_3d = False
+                for layer, ph_geoms in self.gmsh_physical_groups.items():
+                    if f"{name}_sfs" in ph_geoms:
+                        sc_is_3d = True
+                        break
+
+                # Name matching based on the QGmshRenderer convention.
+                if sc_is_3d:
+                    signal_conductor_surfaces.append(f"{name}_sfs")
+                else:
+                    signal_conductor_surfaces.append(f"{name}")
 
             if conductor == "gnd":
                 ground_conductor += signal_conductor_surfaces
