@@ -175,6 +175,7 @@ if config.is_building_docs():
     from .qubits.transmon_pocket_cl import TransmonPocketCL
     from .qubits.transmon_pocket_teeth import TransmonPocketTeeth
     from .resonators.readoutres_fc import ReadoutResFC
+    from .resonators.readoutres_fc_generalized import GeneralizedReadoutResFC
     from .resonators.resonator_lumped import ResonatorLumped
     from .sample_shapes.circle_caterpillar import CircleCaterpillar
     from .sample_shapes.circle_raster import CircleRaster

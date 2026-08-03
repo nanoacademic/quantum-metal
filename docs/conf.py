@@ -76,6 +76,9 @@ _MOCKED_MODULES = [
     "matplotlib.backends.backend_qt5agg",
     "matplotlib.backends.backend_qtagg",
     "matplotlib.backends.qt_compat",
+    "qiskit_metal.renderers.renderer_qtcad",
+    "qiskit_metal.renderers.renderer_qtcad.qtcad_renderer",
+    "qiskit_metal.renderers.renderer_qtcad.qtcad_base",
 ]
 for _mod in _MOCKED_MODULES:
     sys.modules.setdefault(_mod, _MockModule(_mod))
