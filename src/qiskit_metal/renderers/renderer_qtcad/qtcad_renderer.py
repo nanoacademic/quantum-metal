@@ -933,7 +933,6 @@ class QQTCADRenderer(QRendererAnalysis):
         solve_for,
         json_filepath=None,
         env_name="qtcad",
-        pixi: Optional[str] = None,
     ):
         """Calls wrapper file in a specific environment
 
@@ -943,11 +942,9 @@ class QQTCADRenderer(QRendererAnalysis):
                 json_filepath (str): Path to the necessary parameters for the solver.
                   Defaults to the value used when exporting them using
                   `export_parameters`.
-                env_name (str, optional): name of the Conda environment where QTCAD® is
-                  available.
-                pixi (str, optional): Path to the directory were QTCAD® is set up via
-                  Pixi. If not `None`, it takes precedence over `env_name` and runs the
-                  simulation using QTCAD® via Pixi.
+                env_name (str): name of the conda environment where QTCAD® is available.
+                  Default: qtcad
+
         """
         # Path to the QTCAD wrapper routine.
         qtcad_wrapper_path = str(Path(__file__).parent.resolve() / "wrapper.py")
@@ -984,67 +981,24 @@ class QQTCADRenderer(QRendererAnalysis):
                 " Please make sure to have generated it using `export_geometry` or"
                 " `export_mesh`.")
 
-        # Determine if Pixi or Conda should be used.
-        if pixi is not None:
-            pixi_path = Path(pixi).resolve()
-            # Ensure the provided path contains a .pixi directory.
-            if not (pixi_path / ".pixi").exists():
-                raise Exception(
-                    f"Unable to find .pixi in the directory ‘{pixi}’."
-                    " Make sure you have set up the QTCAD® Pixi environment."
-                )
-            pixi_cmd = shutil.which("pixi")
-            if not pixi_cmd:
-                raise Exception("Unable to find the ‘pixi’ executable.")
+        qtcad_env_found = self._check_conda_env(env_name)
+        if not qtcad_env_found:
+            raise Exception(
+                f"Unable to find QTCAD®'s conda environment ‘{env_name}’."
+                " If you have installed QTCAD® in a custom environment, please provide its name"
+                " using the parameter `env_name`.")
 
-            # Identify the correct manifest file.
-            manifest_file = pixi_path / "pixi.toml"
-            if not manifest_file.exists() and (
-                pixi_path / "pyproject.toml"
-            ).exists():
-                manifest_file = pixi_path / "pyproject.toml"
-
-            # Construct the Pixi command with unbuffered Python (-u).
-            cmd = [
-                pixi_cmd,
-                "run",
-                "--manifest-path",
-                str(manifest_file),
-                "python",
-                "-u",
-                qtcad_wrapper_path,
-                solve_for,
-                json_filepath,
-            ]
-        else:
-            qtcad_env_found = self._check_conda_env(env_name)
-            if not qtcad_env_found:
-                raise Exception(
-                    f"Unable to find QTCAD®'s Conda environment ‘{env_name}’."
-                    " If you have installed QTCAD® in a custom environment,"
-                    " please provide its name using the parameter `env_name`."
-                )
-
-            conda_cmd = shutil.which("conda")
-            # Construct the Conda command with unbuffered Python (-u).
-            cmd = [
-                conda_cmd,
-                "run",
-                "--no-capture-output",
-                "-n",
-                env_name,
-                "python",
-                "-u",
-                qtcad_wrapper_path,
-                solve_for,
-                json_filepath,
-            ]
+        # Launch a subprocess with unbuffered Python (-u).
+        conda_cmd = shutil.which("conda")
 
         self.logger.info("=================")
         self.logger.info("Running QTCAD®...")
         self.logger.info("=================")
         process = subprocess.Popen(
-            cmd,
+            [
+                conda_cmd, "run", "--no-capture-output", "-n", env_name,
+                "python", "-u", qtcad_wrapper_path, solve_for, json_filepath
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             # Ensures output is a string, not a byte object.
