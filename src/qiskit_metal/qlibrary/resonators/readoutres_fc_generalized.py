@@ -1,9 +1,9 @@
-"""Generalization of `ReadoutResFC`
+"""Generalization of ``ReadoutResFC``
 
-This module defines the `GeneralizedReadoutResFC` component class, which is an
-extension of the standard `ReadoutResFC` to support horizontal and/or vertical
-mirroring (via `mirror_x` and `mirror_y` options) and a customizable starting
-angle (via `start_angle`).
+This module defines the ``GeneralizedReadoutResFC`` component class, which is
+an extension of the standard ``ReadoutResFC`` to support horizontal and/or
+vertical mirroring (via ``mirror_x`` and ``mirror_y`` options) and a
+customizable starting angle (via ``start_angle``).
 
 """
 
@@ -14,29 +14,29 @@ import numpy as np
 
 
 class GeneralizedReadoutResFC(ReadoutResFC):
-    """.. image::
-        GeneralizedReadoutResFC.png
+    """.. image:: GeneralizedReadoutResFC.png
 
     Generalized flip-chip readout resonator.
 
-    This component extends `ReadoutResFC` to allow for a custom starting
-    angle for the takeoff leg (`start_angle`, counter-clockwise) and options
-    to mirror the entire geometry (`mirror_x`, `mirror_y`), which are applied
-    lastly.
+    This component extends ``ReadoutResFC`` to allow for a custom starting
+    angle for the takeoff leg (``start_angle``, counter-clockwise) and options
+    to mirror the entire geometry (``mirror_x``, ``mirror_y``), which are
+    applied lastly.
 
     Geometry overview:
-    - Circle centered at (``pos_x``, ``pos_y``) with radius
-      ``readout_radius``.
-    - Straight line (length ``readout_l1``) at `start_angle` degrees
-      (restricted to -90 to +90 degrees, counter-clockwise).
-    - `(-90 - start_angle)`-degree arc.
-    - Vertical line (length ``readout_l2``).
-    - 90-degree bend.
-    - Horizontal line (length ``readout_l3``).
-    - 180-degree bend.
-    - Horizontal line (length ``readout_l4``).
-    - Five meandering horizontal lines (length ``readout_l5``) separated by
-      ±180-degree arcs.
+
+    -  Circle centered at (``pos_x``, ``pos_y``) with radius
+       ``readout_radius``.
+    -  Straight line (length ``readout_l1``) at ``start_angle`` degrees
+       (restricted to -90 to +90 degrees, counter-clockwise).
+    -  ``(-90 - start_angle)``-degree arc.
+    -  Vertical line (length ``readout_l2``).
+    -  90-degree bend.
+    -  Horizontal line (length ``readout_l3``).
+    -  180-degree bend.
+    -  Horizontal line (length ``readout_l4``).
+    -  Five meandering horizontal lines (length ``readout_l5``) separated by
+       ±180-degree arcs.
 
     The arc bend radius is ``readout_cpw_turnradius``, measured from the CPW
     center to the center of rotation. Lines and arcs form a CPW with width
@@ -47,10 +47,11 @@ class GeneralizedReadoutResFC(ReadoutResFC):
     Note that the mirroring operation is applied last.
 
     Tuning tips:
-    - Change coupling to the qubit by varying ``readout_radius``.
-    - Couple to the feedthrough line via the horizontal section of length
-      ``readout_l3``.
-    - Adjust resonator frequency by varying ``readout_l5``.
+
+    -  Change coupling to the qubit by varying ``readout_radius``.
+    -  Couple to the feedthrough line via the horizontal section of length
+       ``readout_l3``.
+    -  Adjust resonator frequency by varying ``readout_l5``.
     """
 
     # Inherit and extend standard options with our generalized parameters.
