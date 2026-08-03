@@ -27,7 +27,6 @@ from .qtcad_base import QtcadInputParams, QtcadConstants
 from .qtcad_standalone_template import get_standalone_script
 from qiskit_metal import Dict, draw
 from qiskit_metal.toolbox_metal.parsing import parse_entry
-from qiskit_metal.toolbox_python.utility_functions import clean_name
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
 from qiskit_metal.renderers.renderer_gmsh.gmsh_renderer import QGmshRenderer
 from qiskit_metal.designs import MultiPlanar
@@ -230,26 +229,9 @@ class QQTCADRenderer(QRendererAnalysis):
               to `None`.
         """
 
-        # Initialize default layer categories.
         default_layer_types = dict(metal=[1], dielectric=[3])
         self.layer_types = (default_layer_types
-                            if layer_types is None else layer_types.copy())
-
-        # For flip-chip designs lacking an explicit layer stack, assign all active
-        # layers found in the design tables as metal layers unless they are explicitly
-        # classified as dielectric.
-        if design.__class__.__name__ == "DesignFlipChip":
-            layer_set = set()
-            for table in design.qgeometry.tables.values():
-                if "layer" in table.columns:
-                    layer_set.update(table["layer"].dropna().tolist())
-            for _layer in layer_set:
-                if _layer not in self.layer_types.get(
-                    "dielectric", []
-                ) and _layer not in self.layer_types.get("metal", []):
-                    if "metal" not in self.layer_types:
-                        self.layer_types["metal"] = []
-                    self.layer_types["metal"].append(_layer)
+                            if layer_types is None else layer_types)
 
         super().__init__(design=design, initiate=initiate, options=options)
 
@@ -497,7 +479,7 @@ class QQTCADRenderer(QRendererAnalysis):
             for i in self.qcomp_geom_table["component"]
         ]
         phys_grps = [
-            s1 + "_" + clean_name(s2) for s1, s2 in zip(qcomp_names_for_qgeom, qgeom_names)
+            s1 + "_" + s2 for s1, s2 in zip(qcomp_names_for_qgeom, qgeom_names)
         ]
         qgeom_idxs = list(range(len(self.qcomp_geom_table)))
         id_net_dict = {k: -1 for k in phys_grps}

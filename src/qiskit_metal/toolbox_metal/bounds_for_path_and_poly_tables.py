@@ -253,12 +253,7 @@ class BoundsForPathAndPolyTables:
         """
 
         chip_set_from_design = set(self.design.chips.keys())
-        # Retrieve unique chip names. If the design does not have an explicit layer
-        # stack (such as `DesignFlipChip`), fallback to the design’s defined chips.
-        if hasattr(self.design, "ls") and self.design.ls is not None:
-            chip_set_from_layer_stack = self.design.ls.get_unique_chip_names()
-        else:
-            chip_set_from_layer_stack = chip_set_from_design
+        chip_set_from_layer_stack = self.design.ls.get_unique_chip_names()
         if not chip_set_from_layer_stack.issubset(chip_set_from_design):
             self.chip_names_not_in_design(
                 chip_set_from_layer_stack, chip_set_from_design
