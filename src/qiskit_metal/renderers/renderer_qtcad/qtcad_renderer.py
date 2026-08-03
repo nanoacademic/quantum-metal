@@ -1568,47 +1568,62 @@ class QQTCADRenderer(QRendererAnalysis):
 
         # Set up the plot.
         window_size = (500 * num_axes_h, 500 * num_axes_v)
-        plotter = pv.Plotter(shape=(num_axes_v, num_axes_h),
-                             window_size=window_size)
-        for vdx in range(num_axes_v):
-            for hdx in range(len(modes_wrapped[vdx])):
-                mdx = modes_wrapped[vdx][hdx]
-                scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(
-                    n=mdx)
-                title = f"Eigenmode {mdx+1}"
 
-                plotter.subplot(vdx, hdx)
-                # Add the sliced data.
-                plotter.add_mesh(
-                    sliced_data,
-                    scalars=scalar_layer,
-                    log_scale=log,
-                    cmap=cmap,
-                    # Disable the scalar bar to add a customized one later.
-                    show_scalar_bar=False,
-                )
-                plotter.add_title(title, font_size=11)
-                # Add a custom scalar bar.
-                plotter.add_scalar_bar(
-                    title=f"|E| (V/m), mode {mdx+1}",
-                    position_x=0.15,
-                    position_y=0.05,
-                    width=0.7,
-                    height=0.1,
-                    label_font_size=10,
-                )
-                # Make sure the x-y plane is visible.
-                plotter.view_xy()
+        def populate_plotter(plotter: pv.Plotter) -> None:
+            for vdx in range(num_axes_v):
+                for hdx in range(len(modes_wrapped[vdx])):
+                    mdx = modes_wrapped[vdx][hdx]
+                    scalar_layer = (
+                        QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx))
+                    title = f"Eigenmode {mdx+1}"
 
-        if show:
-            plotter.show()
+                    plotter.subplot(vdx, hdx)
+                    # Add the sliced data.
+                    plotter.add_mesh(
+                        sliced_data,
+                        scalars=scalar_layer,
+                        log_scale=log,
+                        cmap=cmap,
+                        # Disable the scalar bar to add a customized one later.
+                        show_scalar_bar=False,
+                    )
+                    plotter.add_title(title, font_size=11)
+                    # Add a custom scalar bar.
+                    plotter.add_scalar_bar(
+                        title=f"|E| (V/m), mode {mdx+1}",
+                        position_x=0.15,
+                        position_y=0.05,
+                        width=0.7,
+                        height=0.1,
+                        label_font_size=10,
+                    )
+                    # Make sure the x-y plane is visible.
+                    plotter.view_xy()
+
         if save:
+            # Use a dedicated off-screen plotter for the screenshot. An
+            # on-screen `Plotter.show()` call can leave the render window
+            # in a state where PyVista treats it as externally closed,
+            # which makes a subsequent `screenshot` call on the same
+            # plotter raise a `RuntimeError`, irrespective of the
+            # `auto_close` argument passed to `show`.
+            save_plotter = pv.Plotter(shape=(num_axes_v, num_axes_h),
+                                      window_size=window_size,
+                                      off_screen=True)
+            populate_plotter(save_plotter)
             output_file = input_file_path.with_suffix(".png").resolve()
-            plotter.screenshot(
+            save_plotter.screenshot(
                 output_file.resolve(),
                 transparent_background=False,
             )
+            save_plotter.close()
             print(f"Image saved to ‘{output_file.resolve()}’.")
+
+        if show:
+            show_plotter = pv.Plotter(shape=(num_axes_v, num_axes_h),
+                                      window_size=window_size)
+            populate_plotter(show_plotter)
+            show_plotter.show()
 
         del mesh
 
@@ -1684,44 +1699,56 @@ class QQTCADRenderer(QRendererAnalysis):
         sliced_data = mesh.slice(normal='z', origin=(0, 0, z))
 
         # Set up the plot.
-        plotter = pv.Plotter(window_size=window_size)
-        # Add the sliced data.
-        plotter.add_mesh(
-            sliced_data,
-            scalars=scalar_layer,
-            log_scale=log,
-            cmap=cmap,
-            # Disable the scalar bar to add a customized one later.
-            show_scalar_bar=False,
-        )
-        plotter.add_title(title, font_size=11)
-        # Add a custom scalar bar.
-        plotter.add_scalar_bar(
-            title=f"|E| (V/m), mode {mdx+1}",
-            position_x=0.15,
-            position_y=0.05,
-            width=0.7,
-            height=0.1,
-            label_font_size=10,
-        )
-        # Make sure the x-y plane is visible.
-        plotter.view_xy()
+        def populate_plotter(plotter: pv.Plotter) -> None:
+            # Add the sliced data.
+            plotter.add_mesh(
+                sliced_data,
+                scalars=scalar_layer,
+                log_scale=log,
+                cmap=cmap,
+                # Disable the scalar bar to add a customized one later.
+                show_scalar_bar=False,
+            )
+            plotter.add_title(title, font_size=11)
+            # Add a custom scalar bar.
+            plotter.add_scalar_bar(
+                title=f"|E| (V/m), mode {mdx+1}",
+                position_x=0.15,
+                position_y=0.05,
+                width=0.7,
+                height=0.1,
+                label_font_size=10,
+            )
+            # Make sure the x-y plane is visible.
+            plotter.view_xy()
 
-        if show:
-            plotter.show()
         if save:
+            # Use a dedicated off-screen plotter for the screenshot. An
+            # on-screen `Plotter.show()` call can leave the render window
+            # in a state where PyVista treats it as externally closed,
+            # which makes a subsequent `screenshot` call on the same
+            # plotter raise a `RuntimeError`, irrespective of the
+            # `auto_close` argument passed to `show`.
+            save_plotter = pv.Plotter(window_size=window_size, off_screen=True)
+            populate_plotter(save_plotter)
             sanitized_layer_name = sanitize_string(
                 QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx + 1))
             output_file = input_file_path.with_name(
                 f"{input_file_path.stem}-{sanitized_layer_name}.png").resolve()
-            plotter.screenshot(
+            save_plotter.screenshot(
                 output_file.resolve(),
                 window_size=window_size,
                 transparent_background=False,
             )
+            save_plotter.close()
             print(
                 f"Image of the eigenmode {n} saved to ‘{output_file.resolve()}’."
             )
+
+        if show:
+            show_plotter = pv.Plotter(window_size=window_size)
+            populate_plotter(show_plotter)
+            show_plotter.show()
 
         del mesh
 
