@@ -1440,6 +1440,7 @@ class QQTCADRenderer(QRendererAnalysis):
 
     def plot_eigenmodes(
         self,
+        z: float = 0.0,
         cmap: str = "magma",
         log: bool = True,
         show: bool = True,
@@ -1447,12 +1448,14 @@ class QQTCADRenderer(QRendererAnalysis):
         vtu_file: str | Path | None = None,
         num_modes: int | None = None,
     ) -> Path | None:
-        """Plot a grid with z=0 slices of all the eigenmodes stored in a VTU file.
+        """Plot a grid with eigenmode slices of a VTU file at a given z-coordinate.
 
         PyVista is used to generate the plots of the absolute value of the electric
         field associated to different Maxwell eigenmodes.
 
         Args:
+            z (float, optional): The z-coordinate (in the units of the VTU file) at
+                which to slice the field. Defaults to `0.0`.
             cmap (str, optional): Name of the colour map to be used. Must be a colour
                 map supported by PyVista. Defaults to `"magma"`.
             log (bool, optional): Whether to use a logarithmic scale when mapping data
@@ -1500,6 +1503,18 @@ class QQTCADRenderer(QRendererAnalysis):
                 QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx))
         mesh = reader.read()
 
+        # Check if the requested z-coordinate is within the mesh bounds.
+        z_min, z_max = mesh.bounds[4], mesh.bounds[5]
+        if not (z_min <= z <= z_max):
+            error_msg = ValueError(
+                f"The requested z-coordinate ({z}) is outside the bounds of the volume:"
+                f" [{z_min}, {z_max}].")
+            self.logger.error(error_msg)
+            raise error_msg
+
+        # Create slice at the requested z.
+        sliced_data = mesh.slice(normal='z', origin=(0, 0, z))
+
         # Maximum number of axes along the horizontal direction.
         num_axes_h = 2
         # Wrap the list with the indices to the eigenmodes and get the
@@ -1521,9 +1536,6 @@ class QQTCADRenderer(QRendererAnalysis):
                 scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(
                     n=mdx)
                 title = f"Eigenmode {mdx+1}"
-
-                # Create slice at z=0.
-                sliced_data = mesh.slice(normal='z', origin=(0, 0, 0))
 
                 plotter.subplot(vdx, hdx)
                 # Add the sliced data.
@@ -1565,13 +1577,14 @@ class QQTCADRenderer(QRendererAnalysis):
     def plot_eigenmode(
         self,
         n: int = 1,
+        z: float = 0.0,
         cmap: str = "magma",
         log: bool = True,
         show: bool = True,
         save: bool = False,
         vtu_file: str | Path | None = None,
     ) -> Path | None:
-        """Plot the z=0 slice of a given eigenmode stored in a VTU file.
+        """Plot a slice of a given eigenmode from a VTU file at a given z-coordinate.
 
         PyVista is used to generate the plot of the absolute value of the electric
         field associated to the desired Maxwell eigenmode.
@@ -1579,6 +1592,8 @@ class QQTCADRenderer(QRendererAnalysis):
         Args:
             n (int): Index of the desired eigenmode. Indexing starts from 1, the ground
                 state.
+            z (float, optional): The z-coordinate (in the units of the VTU file) at
+                which to slice the field. Defaults to `0.0`.
             cmap (str, optional): Name of the colour map to be used. Must be a colour
                 map supported by PyVista. Defaults to `"magma"`.
             log (bool, optional): Whether to use a logarithmic scale when mapping data
@@ -1616,8 +1631,17 @@ class QQTCADRenderer(QRendererAnalysis):
         reader.enable_point_array(scalar_layer)
         mesh = reader.read()
 
-        # Create slice at z=0.
-        sliced_data = mesh.slice(normal='z', origin=(0, 0, 0))
+        # Check if the requested z-coordinate is within the mesh bounds.
+        z_min, z_max = mesh.bounds[4], mesh.bounds[5]
+        if not (z_min <= z <= z_max):
+            error_msg = ValueError(
+                f"The requested z-coordinate ({z}) is outside the bounds of the volume:"
+                f" [{z_min}, {z_max}].")
+            self.logger.error(error_msg)
+            raise error_msg
+
+        # Create slice at the requested z.
+        sliced_data = mesh.slice(normal='z', origin=(0, 0, z))
 
         # Set up the plot.
         plotter = pv.Plotter(window_size=window_size)
