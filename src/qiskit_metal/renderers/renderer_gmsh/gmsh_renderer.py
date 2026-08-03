@@ -16,6 +16,7 @@ try:
 except ImportError:  # pragma: no cover — exercised on lite installs
     gmsh = None
 
+from qiskit_metal.designs.design_flipchip import DesignFlipChip
 from qiskit_metal.renderers.renderer_gmsh.gmsh_utils import _require_gmsh
 from qiskit_metal.renderers.renderer_base import QRenderer
 
@@ -183,6 +184,9 @@ class QGmshRenderer(QRenderer):
         """Function to get thickness of a particular layer and datatype
         from the layer stack.
 
+        This method utilizes the layer stack when available. For layouts without a layer
+        stack (such as flip-chip designs), it defaults to zero thickness.
+
         Args:
             layer_num (int): layer number in the layer stack
             datatype (int): datatype in the layer stack
@@ -191,45 +195,102 @@ class QGmshRenderer(QRenderer):
             float: returns the thickness value
         """
         props = ["thickness"]
-        result = self.parse_units_gmsh(
-            self.design.ls.get_properties_for_layer_datatype(
-                properties=props, layer_number=layer_num, datatype=datatype
+        # Get properties from the layer stack if the design has one.
+        if hasattr(self.design, "ls") and self.design.ls is not None:
+            result = self.parse_units_gmsh(
+                self.design.ls.get_properties_for_layer_datatype(
+                    properties=props, layer_number=layer_num, datatype=datatype
+                )
             )
-        )
-        if result:
-            return result[0]  # thickness is result[0]
+            if result:
+                return result[0]
+            else:
+                raise ValueError(
+                    f"Could not find {props} for the layer_number={layer_num}. "
+                    "Please verify your layout configuration."
+                )
         else:
-            raise ValueError(
-                f"Could not find {props} for the layer_number={layer_num}. "
-                "Check your design and try again."
-            )
+            # Fallback to zero thickness for designs without an (explicit) layer stack.
+            return 0.0
 
     def get_thickness_zcoord_for_layer_datatype(
-        self, layer_num: int, datatype: int = 0
+        self, layer_num: int, datatype: int = 0, chip_name: str = None
     ) -> tuple[float, float]:
         """Function to get the thickness and z_coord of a particular layer
-        and datatype from the layer stack.
+        from the layer stack.
+
+        This method supports regular planar designs (which have a layer stack) and
+        multi-chip/flip-chip designs (which may lack a layer stack).
+        For designs without a layer stack, it dynamically resolves the chip-level
+        z-coordinate of the layer.
 
         Args:
-            layer_num (int): layer number in the layer stack
+            layer_num (int): layer number in the layout
             datatype (int): datatype in the layer stack
+            chip_name (str): optional chip name to explicitly select the z-coordinate
+                for designs without a layer stack.
 
         Returns:
             tuple[float, float]: returns the tuple (thickness, z_coord)
+
         """
         props = ["thickness", "z_coord"]
-        result = self.parse_units_gmsh(
-            self.design.ls.get_properties_for_layer_datatype(
-                properties=props, layer_number=layer_num, datatype=datatype
+        # Retrieve properties from the layer stack if the design has one.
+        if hasattr(self.design, "ls") and self.design.ls is not None:
+            result = self.parse_units_gmsh(
+                self.design.ls.get_properties_for_layer_datatype(
+                    properties=props, layer_number=layer_num, datatype=datatype
+                )
             )
-        )
-        if result:
-            return result
+            if result:
+                return result
+            else:
+                raise ValueError(
+                    f"Could not find {props} for the layer_number={layer_num}. "
+                    "Please verify your layout configuration."
+                )
         else:
-            raise ValueError(
-                f"Could not find {props} for the layer_number={layer_num}. "
-                "Check your design and try again."
-            )
+            # Fallback for designs without a layer stack (example: `DesignFlipChip`).
+            thickness = 0.0
+            z_coord = 0.0
+
+            # If `chip_name` is not provided, perform automatic chip lookup for this
+            # layer, prioritizing chips containing subtractive (ground etcher)
+            # geometries.
+            if chip_name is None:
+                # First, let us search specifically for subtractive geometries
+                # (`table["subtract"]`) on the given layer.
+                # Ground planes are generated from these subtractive elements,
+                # so they indicate the layer’s primary chip.
+                for table_name, table in self.design.qgeometry.tables.items():
+                    if "layer" in table.columns and "chip" in table.columns:
+                        mask = (table["layer"] == layer_num) & (
+                            table.get("subtract", False) == True
+                        )
+                        matching = table[mask]
+                        if not matching.empty:
+                            chip_name = matching.iloc[0]["chip"]
+                            break
+
+                # Then, if no subtractive geometry is found, fallback to searching for
+                # any component geometry defined on this layer to infer the chip name.
+                if chip_name is None:
+                    for table_name, table in self.design.qgeometry.tables.items():
+                        if "layer" in table.columns and "chip" in table.columns:
+                            mask = table["layer"] == layer_num
+                            matching = table[mask]
+                            if not matching.empty:
+                                chip_name = matching.iloc[0]["chip"]
+                                break
+
+            # Finally, retrieve the `center_z` coordinate from the associated chip.
+            if chip_name is not None and hasattr(self.design, "chips"):
+                if chip_name in self.design.chips:
+                    chip_size = self.design.chips[chip_name].get("size", {})
+                    if "center_z" in chip_size:
+                        z_coord = self.parse_units_gmsh(chip_size["center_z"])
+
+            return thickness, z_coord
 
     def render_design(
         self,
@@ -274,6 +335,9 @@ class QGmshRenderer(QRenderer):
 
         # defaultdict: chip -- geom_tag
         self.layers_dict = defaultdict(list)
+
+        # dict: chip_name -- List of tags representing the chip’s substrate.
+        self.chip_substrates = dict()
 
         # defaultdict: chip -- set(geom_tag)
         self.layer_subtract_dict = defaultdict(set)
@@ -481,7 +545,7 @@ class QGmshRenderer(QRenderer):
         qc_shapely = junc.geometry
         qc_width = self.parse_units_gmsh(junc.width)
         qc_thickness, qc_z = self.get_thickness_zcoord_for_layer_datatype(
-            layer_num=junc.layer
+            layer_num=junc.layer, chip_name=junc.get("chip", None)
         )
 
         vecs = Vec3DArray.make_vec3DArray(
@@ -534,7 +598,7 @@ class QGmshRenderer(QRenderer):
             else 0.0
         )
         qc_thickness, qc_z = self.get_thickness_zcoord_for_layer_datatype(
-            layer_num=path.layer
+            layer_num=path.layer, chip_name=path.get("chip", None)
         )
 
         vecs = Vec3DArray.make_vec3DArray(
@@ -575,13 +639,34 @@ class QGmshRenderer(QRenderer):
     def make_poly_surface(self, points: List[np.ndarray], chip_z: float) -> int:
         """Make a Gmsh surface for creating poly type QGeometries
 
+        This method converts a list of 2D/3D polygon vertices into a synchronized OCC
+        plane surface. It filters out consecutive duplicate vertices to prevent
+        zero-length line exceptions in Gmsh.
+
         Args:
-            points (List[np.ndarray]): A list of 3D vectors (np.ndarray) defining polygon
-            chip_z (float): z-coordinate of the chip
+            points (List[np.ndarray]): A list of 3D vectors defining the polygon.
+            chip_z (float): z-coordinate of the chip’s surface, which rests on the
+                interface between the metal and the substrate
 
         Returns:
             int: tag of the created Gmsh surface
         """
+        # Remove consecutive duplicate points to avoid zero-length lines in Gmsh.
+        # Otherwise, `addLine` may fail when vertices overlap.
+        tol_abs_duplicated_point = 1e-9
+        cleaned_points = []
+        for pt in points:
+            if not cleaned_points or not np.allclose(
+                pt[:2], cleaned_points[-1][:2], atol=tol_abs_duplicated_point
+            ):
+                cleaned_points.append(pt)
+        # Ensure the polygon is closed properly without duplicate end-caps.
+        if len(cleaned_points) > 1 and not np.allclose(
+            cleaned_points[0][:2], cleaned_points[-1][:2], atol=tol_abs_duplicated_point
+        ):
+            cleaned_points.append(cleaned_points[0])
+        points = cleaned_points
+
         lines = []
         first_tag = -1
         prev_tag = -1
@@ -608,7 +693,7 @@ class QGmshRenderer(QRenderer):
         """
         qc_shapely = poly.geometry
         qc_thickness, qc_z = self.get_thickness_zcoord_for_layer_datatype(
-            layer_num=poly.layer
+            layer_num=poly.layer, chip_name=poly.get("chip", None)
         )
 
         vecs = Vec3DArray.make_vec3DArray(
@@ -676,7 +761,7 @@ class QGmshRenderer(QRenderer):
             width, gap = self.parse_units_gmsh([pin_dict["width"], pin_dict["gap"]])
             mid, normal = self.parse_units_gmsh(pin_dict["middle"]), pin_dict["normal"]
             qc_thickness, qc_z = self.get_thickness_zcoord_for_layer_datatype(
-                layer_num=qc_layer
+                layer_num=qc_layer, chip_name=qcomp.options.get("chip", None)
             )
 
             rect_mid = mid + normal * gap / 2
@@ -726,7 +811,16 @@ class QGmshRenderer(QRenderer):
             vacuum_box_min_gap (str, optional): minimal spacing between the vacuum box surface
                                                     and the sample holder box. Defaults to "1um".
         """
-        layer_list = list(set(l for l in self.design.ls.ls_df["layer"]))
+        if hasattr(self.design, "ls") and self.design.ls is not None:
+            layer_list = list(set(l for l in self.design.ls.ls_df["layer"]))
+        else:
+            # If no layer stack is present, scan all geometry tables to
+            # discover the active layers in the design.
+            layer_set = set()
+            for table_name, table in self.design.qgeometry.tables.items():
+                if "layer" in table.columns:
+                    layer_set.update(table["layer"].dropna().tolist())
+            layer_list = list(layer_set)
 
         if omit_layers is not None:
             layer_list = list(l for l in layer_list if l not in omit_layers)
@@ -756,11 +850,51 @@ class QGmshRenderer(QRenderer):
 
             self.render_layer(layer)
 
+        # Render the substrate for each chip if design lacks a layer stack or if this is
+        # a flip-chip design, which always defines substrates in `design.chips`.
+        if not (
+            hasattr(self.design, "ls") and self.design.ls is not None
+        ) or isinstance(self.design, DesignFlipChip):
+            for chip_name, chip_info in self.design.chips.items():
+                size = self.design.parse_value(chip_info.get("size", {}))
+                if all(k in size for k in ["center_z", "size_z"]):
+                    parsed_size_z = self.parse_units_gmsh(size["size_z"])
+                    parsed_center_z = self.parse_units_gmsh(size["center_z"])
+
+                    # Align the horizontal boundaries exactly with the ground planes,
+                    # `self.box_xy_bounds`. This ensures the substrate will have the
+                    # same size along xy as the ground planes.
+                    x = self.box_xy_bounds[0]
+                    y = self.box_xy_bounds[1]
+                    z = parsed_center_z
+                    dx = self.box_xy_bounds[2] - self.box_xy_bounds[0]
+                    dy = self.box_xy_bounds[3] - self.box_xy_bounds[1]
+                    dz = parsed_size_z
+
+                    # Create the box representing the substrate.
+                    substrate_tag = gmsh.model.occ.addBox(x, y, z, dx, dy, dz)
+                    self.chip_substrates[chip_name] = [substrate_tag]
+
         if draw_sample_holder:
+            # Check if variables are explicitly defined in the design.
             if "sample_holder_top" in self.design.variables.keys():
                 p = self.design.variables
-            else:
+            # Retrieve them from the first chip’s size (standard for `DesignPlanar`).
+            # Note: We check if the keys are actually present because `addict.Dict`
+            # returns an empty `Dict` instead of a `KeyError` on missing keys.
+            elif (
+                hasattr(self.design, "get_chip_size")
+                and len(self.design.chips) > 0
+                and "sample_holder_top"
+                in self.design.get_chip_size(list(self.design.chips.keys())[0])
+            ):
+                p = self.design.get_chip_size(list(self.design.chips.keys())[0])
+            # If available, fall back to the multiplanar package configuration.
+            elif hasattr(self.design, "_uwave_package"):
                 p = self.design._uwave_package
+            # Otherwise, fallback to avoid a crash.
+            else:
+                p = {"sample_holder_top": "8mm", "sample_holder_bottom": "8mm"}
 
             vac_height = self.parse_units_gmsh(
                 [p["sample_holder_top"], p["sample_holder_bottom"]]
@@ -878,6 +1012,11 @@ class QGmshRenderer(QRenderer):
             for _, jj_sfs in geoms.items():
                 all_geom_dimtags += [(2, jj) for jj in jj_sfs]
 
+        # Add the substrates to the list of geometries to be fragmented.
+        for chip_name, tags in self.chip_substrates.items():
+            for tag in tags:
+                all_geom_dimtags.append((3, tag))
+
         if draw_sample_holder:
             object_dimtag = (3, self.vacuum_box)
             all_layer_geoms[-1] = dict(vacuum_box=[self.vacuum_box])
@@ -916,6 +1055,7 @@ class QGmshRenderer(QRenderer):
             1: self.polys_dict,
             2: self.juncs_dict,
             3: self.layers_dict,
+            4: self.chip_substrates,
         }
 
         # Safely replace old tags with their new fragmented tags across all
@@ -990,7 +1130,16 @@ class QGmshRenderer(QRenderer):
             ValueError: if self.layer_types is not a dict
             ValueError: if layer number is not in self.layer_types
         """
-        layer_numbers = list(set(l for l in self.design.ls.ls_df["layer"]))
+        if hasattr(self.design, "ls") and self.design.ls is not None:
+            layer_numbers = list(set(l for l in self.design.ls.ls_df["layer"]))
+        else:
+            # As in `render_layers`, scan all geometry tables to discover the active
+            # layers in the design if no layer stack is present.
+            layer_set = set()
+            for table_name, table in self.design.qgeometry.tables.items():
+                if "layer" in table.columns:
+                    layer_set.update(table["layer"].dropna().tolist())
+            layer_numbers = list(layer_set)
         for layer in layer_numbers:
             # TODO: check if thickness == 0, then fragment differently
             layer_thickness = self.get_thickness_for_layer_datatype(layer_num=layer)
@@ -1046,9 +1195,12 @@ class QGmshRenderer(QRenderer):
                 elif layer in self.layer_types["dielectric"]:
                     layer_type = "dielectric"
                 else:
-                    raise ValueError(
-                        "Layer number not in the specified `self.layer_types` dict."
+                    # Most likely this is the ground plane as well.
+                    self.logger.warning(
+                        f"Layer {layer} not in the specified `self.layer_types` dict."
+                        " Defaulting to `ground_plane`."
                     )
+                    layer_type = "ground_plane"
 
                 layer_name = layer_type + f"_(layer {layer})"
                 layer_tag = self.layers_dict[layer]
@@ -1083,6 +1235,28 @@ class QGmshRenderer(QRenderer):
                             dim=layer_dim, tags=layer_tag, name=layer_name
                         )
                         self.physical_groups[layer][layer_name] = ph_tag
+
+        # Assign physical groups related to the substrates (volumes and exposed
+        # surfaces) when the design has no layer stack.
+        for chip_name, tags in self.chip_substrates.items():
+            name = f"dielectric_{chip_name}"
+            if len(tags) > 0:
+                # Substrates are always 3D volumes.
+                ph_vol_tag = gmsh.model.addPhysicalGroup(dim=3, tags=tags, name=name)
+                self.physical_groups[-2][name] = ph_vol_tag
+
+                # Retrieve all boundary surfaces and remove those intersecting metals.
+                all_metal_surfs = self.get_all_metal_surfaces()
+                layer_sfs_tags = []
+                for vol in tags:
+                    sfs = list(gmsh.model.occ.getSurfaceLoops(vol)[1][0])
+                    layer_sfs_tags += [sf for sf in sfs if sf not in all_metal_surfs]
+
+                if len(layer_sfs_tags) > 0:
+                    ph_sfs_tag = gmsh.model.addPhysicalGroup(
+                        dim=2, tags=layer_sfs_tags, name=f"{name}_sfs"
+                    )
+                    self.physical_groups[-2][f"{name}_sfs"] = ph_sfs_tag
 
         if draw_sample_holder:
             # Make physical groups for vacuum box (volume)

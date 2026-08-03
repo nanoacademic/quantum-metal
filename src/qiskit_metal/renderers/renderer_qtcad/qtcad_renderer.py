@@ -24,8 +24,10 @@ import pyvista as pv
 import shapely
 
 from .qtcad_base import QtcadInputParams, QtcadConstants
+from .qtcad_standalone_template import get_standalone_script
 from qiskit_metal import Dict, draw
 from qiskit_metal.toolbox_metal.parsing import parse_entry
+from qiskit_metal.toolbox_python.utility_functions import clean_name
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
 from qiskit_metal.renderers.renderer_gmsh.gmsh_renderer import QGmshRenderer
 from qiskit_metal.designs import MultiPlanar
@@ -43,6 +45,60 @@ def sanitize_string(string: str) -> str:
     filename = re.sub(r'[^\w\s\-_.]', '', string)
     filename = filename.replace(' ', '_')
     return filename
+
+
+class hybrid_staticmethod(staticmethod):
+    """A `staticmethod` subclass that binds the instance when called from an instance.
+
+    This simply allows the users to skip passing a `QQTCADRenderer` instance to
+    `export_script`.
+    """
+
+    def __get__(self, instance, owner):
+        """Access the method and automatically inject the instance’s JSON file path.
+
+        This method:
+
+        1. When called directly on the class (``QQTCADRenderer.export_script``), behaves
+           like a normal `staticmethod`. It expects a JSON file path to be passed
+           explicitly.
+
+        2. When called on an instance (``qtcad_renderer.export_script``), it returns a
+           wrapper that automatically retrieves the instance’s ``json_filepath`` and
+           passes it as the second argument (the JSON path). The user does not need to
+           provide it manually.
+
+        Args:
+            instance: The QTCAD renderer instance if accessed on an object, otherwise
+                ``None``.
+            owner: The class on which the descriptor is accessed.
+
+        Returns:
+            callable: A wrapper function (access via instance) or the original
+                `staticmethod` callable (access via class).
+
+        Raises:
+            ValueError: If accessed on an instance that does not have ``json_filepath``
+                defined yet (usually before `export_parameters` is called).
+        """
+        if instance is None:
+            return staticmethod.__get__(self, instance, owner)
+        else:
+
+            def wrapper(solve_for, script_filepath=None):
+                if (
+                    not hasattr(instance, "json_filepath")
+                    or instance.json_filepath is None
+                ):
+                    raise ValueError(
+                        "The renderer instance does not have `json_filepath` set. "
+                        "Please run `export_parameters` first."
+                    )
+                return staticmethod.__get__(self, instance, owner)(
+                    solve_for, instance.json_filepath, script_filepath
+                )
+
+            return wrapper
 
 
 class QQTCADRenderer(QRendererAnalysis):
@@ -174,9 +230,26 @@ class QQTCADRenderer(QRendererAnalysis):
               to `None`.
         """
 
+        # Initialize default layer categories.
         default_layer_types = dict(metal=[1], dielectric=[3])
         self.layer_types = (default_layer_types
-                            if layer_types is None else layer_types)
+                            if layer_types is None else layer_types.copy())
+
+        # For flip-chip designs lacking an explicit layer stack, assign all active
+        # layers found in the design tables as metal layers unless they are explicitly
+        # classified as dielectric.
+        if design.__class__.__name__ == "DesignFlipChip":
+            layer_set = set()
+            for table in design.qgeometry.tables.values():
+                if "layer" in table.columns:
+                    layer_set.update(table["layer"].dropna().tolist())
+            for _layer in layer_set:
+                if _layer not in self.layer_types.get(
+                    "dielectric", []
+                ) and _layer not in self.layer_types.get("metal", []):
+                    if "metal" not in self.layer_types:
+                        self.layer_types["metal"] = []
+                    self.layer_types["metal"].append(_layer)
 
         super().__init__(design=design, initiate=initiate, options=options)
 
@@ -424,7 +497,7 @@ class QQTCADRenderer(QRendererAnalysis):
             for i in self.qcomp_geom_table["component"]
         ]
         phys_grps = [
-            s1 + "_" + s2 for s1, s2 in zip(qcomp_names_for_qgeom, qgeom_names)
+            s1 + "_" + clean_name(s2) for s1, s2 in zip(qcomp_names_for_qgeom, qgeom_names)
         ]
         qgeom_idxs = list(range(len(self.qcomp_geom_table)))
         id_net_dict = {k: -1 for k in phys_grps}
@@ -909,6 +982,182 @@ class QQTCADRenderer(QRendererAnalysis):
         with open(json_filepath, "w") as f:
             json.dump(data, f, indent=2)
 
+    @hybrid_staticmethod
+    def export_script(
+        solve_for: str,
+        json_filepath: Union[str, Path],
+        script_filepath: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Set up a standalone Python QTCAD script for a given type of simulation.
+
+        This converts the JSON file output by QQTCADRenderer into a plain script to run
+        a QTCAD simulation from the design produced by Quantum Metal. The output script
+        considers the layout and mesh files already produced by Quantum Metal.
+
+        Parts of this method were taken from QQTCADRenderer’s `wrapper.py`.
+
+        Args:
+            solve_for: Solve for `"cap"` (capacitance matrix) or `"eigs"` (Maxwell
+                eigenmodes).
+            json_filepath: Path to the JSON file containing simulation parameters.
+            script_filepath: Optional path to where the generated Python script will be
+                saved. Defaults to the basename of the mesh file + "_qtcad_only.py"
+                inside ``output_dir``.
+
+        Returns:
+            Path: The path to the generated script.
+        """
+        if solve_for not in ["cap", "eigs"]:
+            raise ValueError("`solve_for` must be either 'cap' or 'eigs'.")
+
+        json_filepath = Path(json_filepath)
+
+        if not json_filepath.exists():
+            raise FileNotFoundError(
+                f"The JSON QTCAD parameters file '{json_filepath}' was not found."
+                " Please make sure to run `export_parameters()` first and ensure that"
+                " it has completed successfully."
+            )
+
+        with open(json_filepath, "r") as f:
+            data = json.load(f)
+
+        gmsh_physical_groups = data["gmsh_physical_groups"]
+        _conductors = data["_conductors"]
+        _inductive_ports = data["_inductive_ports"]
+        sample_holder = data["sample_holder"]
+        qtcad_options = data["qtcad_options"]
+
+        mesh_filepath = qtcad_options["mesh_filepath"]
+        mesh_scale = qtcad_options["mesh_scale"]
+        geo_filepath = qtcad_options.get("geo_filepath", None)
+        output_dir = qtcad_options["output_dir"]
+        make_subdir = qtcad_options["make_subdir"]
+        capacitance = qtcad_options["capacitance"]
+        capacitance_raw = qtcad_options["capacitance_raw"]
+        maxwell_emode = qtcad_options["maxwell_emode"]
+        maxwell_emode_raw = qtcad_options["maxwell_emode_raw"]
+
+        # Get default parameters dynamically from `default_options`.
+        default_cap = QQTCADRenderer.default_options.get("capacitance")
+        default_eig = QQTCADRenderer.default_options.get("maxwell_emode")
+
+        # Retrieve capacitance options, fallback to `default_options`.
+        cap_tol_rel = capacitance.get("tol_rel", default_cap.get("tol_rel"))
+        cap_tol_abs = capacitance.get("tol_abs", default_cap.get("tol_abs"))
+        cap_min_iters = capacitance.get(
+            "min_converged_iters", default_cap.get("min_converged_iters")
+        )
+
+        # Retrieve Maxwell eigenmode options, fallback to `default_options`.
+        eig_num_modes = maxwell_emode.get(
+            "num_modes", default_eig.get("num_modes")
+        )
+        eig_tol_rel = maxwell_emode.get("tol_rel", default_eig.get("tol_rel"))
+        eig_min_iters = maxwell_emode.get(
+            "min_converged_iters", default_eig.get("min_converged_iters")
+        )
+
+        # 1. Set up dielectric regions.
+        dielectric_regions = []
+        if sample_holder:
+            dielectric_regions.append(
+                'device.new_region("vacuum_box", qtcad_materials.vacuum)'
+            )
+        for layer, ph_geoms in gmsh_physical_groups.items():
+            if layer in ["global", "chips"]:
+                continue
+            for k in ph_geoms.keys():
+                if "dielectric" in k and "_sfs" not in k:
+                    dielectric_regions.append(
+                        f'device.new_region("{k}", qtcad_materials.Si)'
+                    )
+        dielectric_regions_code = "\n".join(dielectric_regions)
+
+        # 2. Set up signal conductors.
+        signal_conductors = dict()
+        ground_conductor = []
+        conductors = []
+
+        for layer, ph_geoms in gmsh_physical_groups.items():
+            if layer in ["global", "chips"]:
+                continue
+            for name in ph_geoms:
+                if "dielectric" in name:
+                    continue
+                if ("ground_plane" in name) and ("sfs" in name):
+                    ground_conductor.append(name)
+
+        for conductor_name, geom_names in _conductors.items():
+            signal_conductor_surfaces = [f"{name}_sfs" for name in geom_names]
+            if conductor_name == "gnd":
+                ground_conductor += signal_conductor_surfaces
+            else:
+                signal_conductors[geom_names[-1]] = signal_conductor_surfaces
+
+        signal_conductors["ground_plane"] = ground_conductor
+
+        for cond in signal_conductors.values():
+            conductors += cond
+
+        # 3. Set up inductive ports.
+        inductive_ports_code_lines = []
+        for qubit_name, junction_params in _inductive_ports.items():
+            if junction_params.get("bnd_spec") is None:
+                continue
+            inductive_ports_code_lines.append(
+                f"device.new_inductor(\n"
+                f"    bnd_spec={repr(junction_params['bnd_spec'])},\n"
+                f"    inductance={repr(junction_params['inductance'])},\n"
+                f"    length={repr(junction_params.get('length'))},\n"
+                f"    width={repr(junction_params.get('width'))},\n"
+                f"    dir={repr(junction_params.get('dir'))}\n"
+                f")"
+            )
+        if inductive_ports_code_lines:
+            inductive_ports_code = "\n".join(inductive_ports_code_lines)
+        else:
+            inductive_ports_code = "pass"
+
+        # 4. Generate script.
+        script_content = get_standalone_script(
+            solve_for=solve_for,
+            mesh_filepath=mesh_filepath,
+            mesh_scale=mesh_scale,
+            dielectric_regions_code=dielectric_regions_code,
+            signal_conductors=signal_conductors,
+            conductors=conductors,
+            inductive_ports_code=inductive_ports_code,
+            capacitance_raw=capacitance_raw,
+            cap_tol_rel=cap_tol_rel,
+            cap_tol_abs=cap_tol_abs,
+            cap_min_iters=cap_min_iters,
+            output_dir=output_dir,
+            make_subdir=make_subdir,
+            geo_filepath=geo_filepath,
+            maxwell_emode_raw=maxwell_emode_raw,
+            eig_num_modes=eig_num_modes,
+            eig_tol_rel=eig_tol_rel,
+            eig_min_iters=eig_min_iters,
+        )
+
+        if script_filepath is None:
+            mesh_stem = Path(mesh_filepath).stem
+            script_filepath = json_filepath.parent / f"{mesh_stem}_qtcad_only.py"
+        else:
+            script_filepath = Path(script_filepath)
+
+        script_filepath.parent.resolve().mkdir(exist_ok=True, parents=True)
+        with open(script_filepath, "w") as f:
+            f.write(script_content)
+
+        print(
+            f"Standalone QTCAD script saved to ‘{script_filepath}’."
+            " To run it, activate QTCAD’s Conda or Pixi environment."
+        )
+
+        return script_filepath
+
     def _check_conda_env(self, env_name) -> bool:
         """Check the existence of a conda environment.
 
@@ -933,6 +1182,7 @@ class QQTCADRenderer(QRendererAnalysis):
         solve_for,
         json_filepath=None,
         env_name="qtcad",
+        pixi: Optional[str] = None,
     ):
         """Calls wrapper file in a specific environment
 
@@ -942,9 +1192,11 @@ class QQTCADRenderer(QRendererAnalysis):
                 json_filepath (str): Path to the necessary parameters for the solver.
                   Defaults to the value used when exporting them using
                   `export_parameters`.
-                env_name (str): name of the conda environment where QTCAD® is available.
-                  Default: qtcad
-
+                env_name (str, optional): name of the Conda environment where QTCAD® is
+                  available.
+                pixi (str, optional): Path to the directory were QTCAD® is set up via
+                  Pixi. If not `None`, it takes precedence over `env_name` and runs the
+                  simulation using QTCAD® via Pixi.
         """
         # Path to the QTCAD wrapper routine.
         qtcad_wrapper_path = str(Path(__file__).parent.resolve() / "wrapper.py")
@@ -981,24 +1233,67 @@ class QQTCADRenderer(QRendererAnalysis):
                 " Please make sure to have generated it using `export_geometry` or"
                 " `export_mesh`.")
 
-        qtcad_env_found = self._check_conda_env(env_name)
-        if not qtcad_env_found:
-            raise Exception(
-                f"Unable to find QTCAD®'s conda environment ‘{env_name}’."
-                " If you have installed QTCAD® in a custom environment, please provide its name"
-                " using the parameter `env_name`.")
+        # Determine if Pixi or Conda should be used.
+        if pixi is not None:
+            pixi_path = Path(pixi).resolve()
+            # Ensure the provided path contains a .pixi directory.
+            if not (pixi_path / ".pixi").exists():
+                raise Exception(
+                    f"Unable to find .pixi in the directory ‘{pixi}’."
+                    " Make sure you have set up the QTCAD® Pixi environment."
+                )
+            pixi_cmd = shutil.which("pixi")
+            if not pixi_cmd:
+                raise Exception("Unable to find the ‘pixi’ executable.")
 
-        # Launch a subprocess with unbuffered Python (-u).
-        conda_cmd = shutil.which("conda")
+            # Identify the correct manifest file.
+            manifest_file = pixi_path / "pixi.toml"
+            if not manifest_file.exists() and (
+                pixi_path / "pyproject.toml"
+            ).exists():
+                manifest_file = pixi_path / "pyproject.toml"
+
+            # Construct the Pixi command with unbuffered Python (-u).
+            cmd = [
+                pixi_cmd,
+                "run",
+                "--manifest-path",
+                str(manifest_file),
+                "python",
+                "-u",
+                qtcad_wrapper_path,
+                solve_for,
+                json_filepath,
+            ]
+        else:
+            qtcad_env_found = self._check_conda_env(env_name)
+            if not qtcad_env_found:
+                raise Exception(
+                    f"Unable to find QTCAD®'s Conda environment ‘{env_name}’."
+                    " If you have installed QTCAD® in a custom environment,"
+                    " please provide its name using the parameter `env_name`."
+                )
+
+            conda_cmd = shutil.which("conda")
+            # Construct the Conda command with unbuffered Python (-u).
+            cmd = [
+                conda_cmd,
+                "run",
+                "--no-capture-output",
+                "-n",
+                env_name,
+                "python",
+                "-u",
+                qtcad_wrapper_path,
+                solve_for,
+                json_filepath,
+            ]
 
         self.logger.info("=================")
         self.logger.info("Running QTCAD®...")
         self.logger.info("=================")
         process = subprocess.Popen(
-            [
-                conda_cmd, "run", "--no-capture-output", "-n", env_name,
-                "python", "-u", qtcad_wrapper_path, solve_for, json_filepath
-            ],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             # Ensures output is a string, not a byte object.
@@ -1145,6 +1440,7 @@ class QQTCADRenderer(QRendererAnalysis):
 
     def plot_eigenmodes(
         self,
+        z: float = 0.0,
         cmap: str = "magma",
         log: bool = True,
         show: bool = True,
@@ -1152,12 +1448,14 @@ class QQTCADRenderer(QRendererAnalysis):
         vtu_file: str | Path | None = None,
         num_modes: int | None = None,
     ) -> Path | None:
-        """Plot a grid with z=0 slices of all the eigenmodes stored in a VTU file.
+        """Plot a grid with eigenmode slices of a VTU file at a given z-coordinate.
 
         PyVista is used to generate the plots of the absolute value of the electric
         field associated to different Maxwell eigenmodes.
 
         Args:
+            z (float, optional): The z-coordinate (in the units of the VTU file) at
+                which to slice the field. Defaults to `0.0`.
             cmap (str, optional): Name of the colour map to be used. Must be a colour
                 map supported by PyVista. Defaults to `"magma"`.
             log (bool, optional): Whether to use a logarithmic scale when mapping data
@@ -1205,6 +1503,18 @@ class QQTCADRenderer(QRendererAnalysis):
                 QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(n=mdx))
         mesh = reader.read()
 
+        # Check if the requested z-coordinate is within the mesh bounds.
+        z_min, z_max = mesh.bounds[4], mesh.bounds[5]
+        if not (z_min <= z <= z_max):
+            error_msg = ValueError(
+                f"The requested z-coordinate ({z}) is outside the bounds of the volume:"
+                f" [{z_min}, {z_max}].")
+            self.logger.error(error_msg)
+            raise error_msg
+
+        # Create slice at the requested z.
+        sliced_data = mesh.slice(normal='z', origin=(0, 0, z))
+
         # Maximum number of axes along the horizontal direction.
         num_axes_h = 2
         # Wrap the list with the indices to the eigenmodes and get the
@@ -1226,9 +1536,6 @@ class QQTCADRenderer(QRendererAnalysis):
                 scalar_layer = QtcadConstants.EIGENMODE_LAYER_TEMPLATE.format(
                     n=mdx)
                 title = f"Eigenmode {mdx+1}"
-
-                # Create slice at z=0.
-                sliced_data = mesh.slice(normal='z', origin=(0, 0, 0))
 
                 plotter.subplot(vdx, hdx)
                 # Add the sliced data.
@@ -1270,13 +1577,14 @@ class QQTCADRenderer(QRendererAnalysis):
     def plot_eigenmode(
         self,
         n: int = 1,
+        z: float = 0.0,
         cmap: str = "magma",
         log: bool = True,
         show: bool = True,
         save: bool = False,
         vtu_file: str | Path | None = None,
     ) -> Path | None:
-        """Plot the z=0 slice of a given eigenmode stored in a VTU file.
+        """Plot a slice of a given eigenmode from a VTU file at a given z-coordinate.
 
         PyVista is used to generate the plot of the absolute value of the electric
         field associated to the desired Maxwell eigenmode.
@@ -1284,6 +1592,8 @@ class QQTCADRenderer(QRendererAnalysis):
         Args:
             n (int): Index of the desired eigenmode. Indexing starts from 1, the ground
                 state.
+            z (float, optional): The z-coordinate (in the units of the VTU file) at
+                which to slice the field. Defaults to `0.0`.
             cmap (str, optional): Name of the colour map to be used. Must be a colour
                 map supported by PyVista. Defaults to `"magma"`.
             log (bool, optional): Whether to use a logarithmic scale when mapping data
@@ -1321,8 +1631,17 @@ class QQTCADRenderer(QRendererAnalysis):
         reader.enable_point_array(scalar_layer)
         mesh = reader.read()
 
-        # Create slice at z=0.
-        sliced_data = mesh.slice(normal='z', origin=(0, 0, 0))
+        # Check if the requested z-coordinate is within the mesh bounds.
+        z_min, z_max = mesh.bounds[4], mesh.bounds[5]
+        if not (z_min <= z <= z_max):
+            error_msg = ValueError(
+                f"The requested z-coordinate ({z}) is outside the bounds of the volume:"
+                f" [{z_min}, {z_max}].")
+            self.logger.error(error_msg)
+            raise error_msg
+
+        # Create slice at the requested z.
+        sliced_data = mesh.slice(normal='z', origin=(0, 0, z))
 
         # Set up the plot.
         plotter = pv.Plotter(window_size=window_size)
