@@ -392,6 +392,10 @@ class QQTCADRenderer(QRendererAnalysis):
         # Ignore the volume of metals and replace it with a list of surfaces instead
         ignore_metal_volume = True
 
+        # Exclude the surfaces between touching metal volumes from the surface physical
+        # groups of metals, so that each surface belongs to at most one physical group
+        exclude_internal_metal_surfaces = True
+
         self.gmsh.options.mesh.min_size = initial_mesh_h_min
         self.gmsh.options.mesh.max_size = initial_mesh_h_max
         self.gmsh.options.mesh.algorithm_3d = meshing_algorithm
@@ -418,6 +422,7 @@ class QQTCADRenderer(QRendererAnalysis):
             ignore_metal_volume=ignore_metal_volume,
             omit_ground_for_layers=omit_ground_for_layers,
             vacuum_box_min_gap=vacuum_box_min_gap,
+            exclude_internal_metal_surfaces=exclude_internal_metal_surfaces,
         )
 
         self.sample_holder = draw_sample_holder
