@@ -303,6 +303,7 @@ class QGmshRenderer(QRenderer):
         ignore_metal_volume: bool = False,
         omit_ground_for_layers: Optional[list[int]] = None,
         vacuum_box_min_gap: str = "1um",
+        exclude_internal_metal_surfaces: bool = False,
     ):
         """Render the design in Gmsh and apply changes to modify the geometries
         according to the type of simulation. Simulation parameters provided by the user.
@@ -326,6 +327,11 @@ class QGmshRenderer(QRenderer):
                                                          specified layers. Defaults to None.
             vacuum_box_min_gap (str, optional): minimal spacing between the vacuum box surface
                                                     and the sample holder box. Defaults to "1um".
+            exclude_internal_metal_surfaces (bool, optional): if `True`, omit from the
+                                                    `*_sfs` physical groups the metal
+                                                    surfaces that touch no dielectric or
+                                                    vacuum (i.e. only metal volumes).
+                                                    Defaults to `False`.
         """
 
         # For handling the case when the user wants to use
@@ -363,6 +369,7 @@ class QGmshRenderer(QRenderer):
         self.apply_changes_for_simulation(
             ignore_metal_volume=ignore_metal_volume,
             draw_sample_holder=draw_sample_holder,
+            exclude_internal_metal_surfaces=exclude_internal_metal_surfaces,
         )
 
         if mesh_geoms:
@@ -420,7 +427,10 @@ class QGmshRenderer(QRenderer):
         self.gmsh_occ_synchronize()
 
     def apply_changes_for_simulation(
-        self, ignore_metal_volume: bool, draw_sample_holder: bool
+        self,
+        ignore_metal_volume: bool,
+        draw_sample_holder: bool,
+        exclude_internal_metal_surfaces: bool = False,
     ):
         """This function fragments interfaces to fuse the boundaries and assigns
         physical groups to be used by an FEM solvers for defining bodies and
@@ -430,11 +440,18 @@ class QGmshRenderer(QRenderer):
             ignore_metal_volume (bool, optional): ignore the volume of metals and replace
                                                         it with a list of surfaces instead.
             draw_sample_holder (bool): To draw the sample holder box.
+            exclude_internal_metal_surfaces (bool, optional): if `True`, omit from the
+                                                    `*_sfs` physical groups the metal
+                                                    surfaces that touch no dielectric or
+                                                    vacuum (i.e. only metal volumes).
+                                                    Defaults to `False`.
 
         Raises:
             ValueError: raised when self.layer_types isn't set to a valid dictionary
         """
-        if ignore_metal_volume and self.layer_types is None:
+        if (
+            ignore_metal_volume or exclude_internal_metal_surfaces
+        ) and self.layer_types is None:
             raise ValueError(
                 f"Expected dict for `layer_types`, but found {type(self.layer_types)}."
             )
@@ -446,6 +463,7 @@ class QGmshRenderer(QRenderer):
         self.assign_physical_groups(
             ignore_metal_volume=ignore_metal_volume,
             draw_sample_holder=draw_sample_holder,
+            exclude_internal_metal_surfaces=exclude_internal_metal_surfaces,
         )
 
     def gmsh_occ_synchronize(self):
@@ -1116,8 +1134,48 @@ class QGmshRenderer(QRenderer):
 
         return surf_tags
 
+    def get_all_metal_volumes(self):
+        """Return the tags of all metal volumes (i.e. volumes on metal layers
+        with a nonzero thickness)."""
+        vol_tags = list()
+        for layer in self.layer_types["metal"]:
+            thickness = self.get_thickness_for_layer_datatype(layer_num=layer)
+            if thickness > 0.0:
+                for _, tag in self.polys_dict[layer].items():
+                    vol_tags += tag
+                for _, tag in self.paths_dict[layer].items():
+                    vol_tags += tag
+                vol_tags += self.layers_dict[layer]
+
+        return vol_tags
+
+    @staticmethod
+    def exclude_internal_surfaces(surf_tags: list, metal_vol_tags: set) -> list:
+        """Return a copy of `surf_tags` without the surfaces that touch only metal
+        volumes.
+
+        Args:
+            surf_tags (list): tags of the surfaces to check.
+            metal_vol_tags (set): tags of the metal volumes.
+
+        Returns:
+            list: tags of the remaining surfaces.
+        """
+        remaining_tags = []
+        for sf in surf_tags:
+            # Volumes that have the surface as one of their faces.
+            adjacent_vol_tags = gmsh.model.getAdjacencies(2, sf)[0]
+            # Keep the surface if at least one of these volumes is not metal.
+            if any(vol not in metal_vol_tags for vol in adjacent_vol_tags):
+                remaining_tags.append(sf)
+
+        return remaining_tags
+
     def assign_physical_groups(
-        self, ignore_metal_volume: bool, draw_sample_holder: bool
+        self,
+        ignore_metal_volume: bool,
+        draw_sample_holder: bool,
+        exclude_internal_metal_surfaces: bool = False,
     ):
         """Assign physical groups to classify different geometries physically.
 
@@ -1125,6 +1183,11 @@ class QGmshRenderer(QRenderer):
             ignore_metal_volume (bool, optional): ignore the volume of metals and replace
                                                         it with a list of surfaces instead.
             draw_sample_holder (bool): To draw the sample holder box.
+            exclude_internal_metal_surfaces (bool, optional): if `True`, omit from the
+                                                    `*_sfs` physical groups the metal
+                                                    surfaces that touch no dielectric or
+                                                    vacuum (i.e. only metal volumes).
+                                                    Defaults to `False`.
 
         Raises:
             ValueError: if self.layer_types is not a dict
@@ -1140,6 +1203,8 @@ class QGmshRenderer(QRenderer):
                 if "layer" in table.columns:
                     layer_set.update(table["layer"].dropna().tolist())
             layer_numbers = list(layer_set)
+        if exclude_internal_metal_surfaces:
+            metal_vol_tags = set(self.get_all_metal_volumes())
         for layer in layer_numbers:
             # TODO: check if thickness == 0, then fragment differently
             layer_thickness = self.get_thickness_for_layer_datatype(layer_num=layer)
@@ -1167,6 +1232,8 @@ class QGmshRenderer(QRenderer):
                             )
                             self.physical_groups[layer][name] = ph_vol_tag
 
+                        if metal_layer and exclude_internal_metal_surfaces:
+                            tags = self.exclude_internal_surfaces(tags, metal_vol_tags)
                         ph_sfs_tag = gmsh.model.addPhysicalGroup(
                             dim=2, tags=tags, name=f"{name}_sfs"
                         )
@@ -1212,6 +1279,10 @@ class QGmshRenderer(QRenderer):
                             layer_sfs = list(gmsh.model.occ.getSurfaceLoops(vol)[1][0])
 
                             if layer_type == "ground_plane":
+                                if exclude_internal_metal_surfaces:
+                                    layer_sfs = self.exclude_internal_surfaces(
+                                        layer_sfs, metal_vol_tags
+                                    )
                                 layer_sfs_tags += layer_sfs
                             else:
                                 layer_sfs_tags += [
